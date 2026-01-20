@@ -8,6 +8,7 @@
 import SwiftUI
 import Combine
 import Charts
+import UniformTypeIdentifiers
 
 enum ExerciseType: String, Codable, CaseIterable {
     case weights
@@ -35,6 +36,16 @@ enum WeightUnit: String, Codable, CaseIterable {
             return "lb"
         }
     }
+}
+
+enum MuscleGroup: String, CaseIterable, Codable {
+    case chest = "Chest"
+    case back = "Back"
+    case shoulders = "Shoulders"
+    case biceps = "Biceps"
+    case triceps = "Triceps"
+    case legs = "Legs"
+    case core = "Core"
 }
 
 struct WorkoutExercise: Identifiable, Codable, Equatable {
@@ -168,15 +179,92 @@ struct WorkoutSession: Identifiable, Codable, Equatable {
     let exercises: [WorkoutExercise]
 }
 
+extension WorkoutSession {
+    func mergedExercises() -> [WorkoutExercise] {
+        var orderedKeys: [String] = []
+        var mergedByKey: [String: WorkoutExercise] = [:]
+
+        for exercise in exercises {
+            let key = "\(exercise.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())|\(exercise.type.rawValue)"
+            if let existing = mergedByKey[key] {
+                switch exercise.type {
+                case .weights:
+                    let combinedSets = existing.sets + exercise.sets
+                    mergedByKey[key] = WorkoutExercise(
+                        id: existing.id,
+                        name: existing.name,
+                        type: existing.type,
+                        sets: combinedSets,
+                        durationMinutes: nil,
+                        calories: nil
+                    )
+                case .cardio:
+                    let currentMinutes = existing.durationMinutes ?? 0
+                    let currentCalories = existing.calories ?? 0
+                    let addMinutes = exercise.durationMinutes ?? 0
+                    let addCalories = exercise.calories ?? 0
+                    let totalMinutes = currentMinutes + addMinutes
+                    let totalCalories = currentCalories + addCalories
+                    mergedByKey[key] = WorkoutExercise(
+                        id: existing.id,
+                        name: existing.name,
+                        type: existing.type,
+                        sets: [],
+                        durationMinutes: totalMinutes > 0 ? totalMinutes : nil,
+                        calories: totalCalories > 0 ? totalCalories : nil
+                    )
+                }
+            } else {
+                orderedKeys.append(key)
+                mergedByKey[key] = exercise
+            }
+        }
+
+        return orderedKeys.compactMap { mergedByKey[$0] }
+    }
+}
+
 struct WorkoutTemplate: Identifiable, Codable, Equatable {
     let id: UUID
     let title: String
     let exercises: [TemplateExercise]
 }
 
+struct LibraryExercise: Identifiable, Codable, Equatable {
+    let id: UUID
+    let name: String
+    let group: MuscleGroup
+}
+
+struct WorkoutBackup: Codable {
+    let version: Int
+    let exportedAt: Date
+    let sessions: [WorkoutSession]
+    let templates: [WorkoutTemplate]
+}
+
+struct BackupDocument: FileDocument {
+    static var readableContentTypes: [UTType] { [.json] }
+
+    var data: Data
+
+    init(data: Data) {
+        self.data = data
+    }
+
+    init(configuration: ReadConfiguration) throws {
+        data = configuration.file.regularFileContents ?? Data()
+    }
+
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        return FileWrapper(regularFileWithContents: data)
+    }
+}
+
 final class WorkoutStore: ObservableObject {
     @Published private(set) var sessions: [WorkoutSession] = []
     @Published private(set) var templates: [WorkoutTemplate] = []
+    @Published private(set) var exerciseLibrary: [LibraryExercise] = WorkoutStore.defaultLibrary
     private var hasLoaded = false
 
     init() {
@@ -184,18 +272,86 @@ final class WorkoutStore: ObservableObject {
     }
 
     func addSession(date: Date, exercises: [WorkoutExercise]) {
-        let session = WorkoutSession(
-            id: UUID(),
-            date: date,
-            exercises: exercises
-        )
-        sessions.insert(session, at: 0)
+        if let index = sessions.firstIndex(where: { Calendar.current.isDate($0.date, inSameDayAs: date) }) {
+            let existing = sessions[index]
+            let mergedExercises = mergeExercises(existing: existing.exercises, incoming: exercises)
+            let merged = WorkoutSession(
+                id: existing.id,
+                date: existing.date,
+                exercises: mergedExercises
+            )
+            sessions[index] = merged
+        } else {
+            let session = WorkoutSession(
+                id: UUID(),
+                date: date,
+                exercises: exercises
+            )
+            sessions.insert(session, at: 0)
+        }
+        sessions.sort { $0.date > $1.date }
         saveSessions()
+    }
+
+    private func mergeExercises(existing: [WorkoutExercise], incoming: [WorkoutExercise]) -> [WorkoutExercise] {
+        var merged = existing
+        var indexByKey: [String: Int] = [:]
+
+        for (idx, exercise) in merged.enumerated() {
+            let key = exerciseMergeKey(for: exercise)
+            indexByKey[key] = idx
+        }
+
+        for exercise in incoming {
+            let key = exerciseMergeKey(for: exercise)
+            if let idx = indexByKey[key] {
+                let current = merged[idx]
+                switch exercise.type {
+                case .weights:
+                    let combinedSets = current.sets + exercise.sets
+                    merged[idx] = WorkoutExercise(
+                        id: current.id,
+                        name: current.name,
+                        type: current.type,
+                        sets: combinedSets,
+                        durationMinutes: nil,
+                        calories: nil
+                    )
+                case .cardio:
+                    let currentMinutes = current.durationMinutes ?? 0
+                    let currentCalories = current.calories ?? 0
+                    let addMinutes = exercise.durationMinutes ?? 0
+                    let addCalories = exercise.calories ?? 0
+                    let totalMinutes = currentMinutes + addMinutes
+                    let totalCalories = currentCalories + addCalories
+                    merged[idx] = WorkoutExercise(
+                        id: current.id,
+                        name: current.name,
+                        type: current.type,
+                        sets: [],
+                        durationMinutes: totalMinutes > 0 ? totalMinutes : nil,
+                        calories: totalCalories > 0 ? totalCalories : nil
+                    )
+                }
+            } else {
+                indexByKey[key] = merged.count
+                merged.append(exercise)
+            }
+        }
+
+        return merged
+    }
+
+    private func exerciseMergeKey(for exercise: WorkoutExercise) -> String {
+        let normalized = exercise.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return "\(normalized)|\(exercise.type.rawValue)"
     }
 
     func updateSession(id: UUID, date: Date, exercises: [WorkoutExercise]) {
         guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
-        sessions[index] = WorkoutSession(id: id, date: date, exercises: exercises)
+        let mergedExercises = mergeExercises(existing: [], incoming: exercises)
+        sessions[index] = WorkoutSession(id: id, date: date, exercises: mergedExercises)
+        sessions.sort { $0.date > $1.date }
         saveSessions()
     }
 
@@ -221,7 +377,7 @@ final class WorkoutStore: ObservableObject {
     }
 
     func addTemplate(from session: WorkoutSession) {
-        let title = "Template \(session.date.formatted(date: .abbreviated, time: .omitted))"
+        let title = "Template \(templates.count + 1)"
         let exercises = session.exercises.map { exercise in
             TemplateExercise(
                 id: UUID(),
@@ -306,13 +462,40 @@ final class WorkoutStore: ObservableObject {
     func exerciseNameCatalog() -> [String] {
         let sessionNames = sessions.flatMap { $0.exercises.map { $0.name } }
         let templateNames = templates.flatMap { $0.exercises.map { $0.name } }
-        let combined = sessionNames + templateNames
+        let libraryNames = exerciseLibrary.map { $0.name }
+        let combined = sessionNames + templateNames + libraryNames
         let unique = Dictionary(grouping: combined, by: { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() })
             .compactMap { $0.value.first }
         return unique
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
             .sorted()
+    }
+
+    func exportBackup() -> WorkoutBackup {
+        WorkoutBackup(
+            version: 1,
+            exportedAt: Date(),
+            sessions: sessions,
+            templates: templates
+        )
+    }
+
+    func importBackup(_ backup: WorkoutBackup) {
+        sessions = backup.sessions.sorted { $0.date > $1.date }
+        templates = backup.templates
+        saveSessions()
+        saveTemplates()
+    }
+
+    func exportBackupData() throws -> Data {
+        let backup = exportBackup()
+        return try JSONEncoder().encode(backup)
+    }
+
+    func importBackupData(_ data: Data) throws {
+        let backup = try JSONDecoder().decode(WorkoutBackup.self, from: data)
+        importBackup(backup)
     }
 
     private func formattedOptionalInt(_ value: Int?) -> String {
@@ -325,6 +508,51 @@ final class WorkoutStore: ObservableObject {
         templates = loadTemplates()
         hasLoaded = true
     }
+
+    private static let defaultLibrary: [LibraryExercise] = [
+        LibraryExercise(id: UUID(), name: "Bench Press", group: .chest),
+        LibraryExercise(id: UUID(), name: "Push Ups", group: .chest),
+        LibraryExercise(id: UUID(), name: "Incline Dumbbell Press", group: .chest),
+        LibraryExercise(id: UUID(), name: "Chest Fly", group: .chest),
+        LibraryExercise(id: UUID(), name: "Dips", group: .chest),
+        LibraryExercise(id: UUID(), name: "Cable Crossover", group: .chest),
+        LibraryExercise(id: UUID(), name: "Lat Pulldown", group: .back),
+        LibraryExercise(id: UUID(), name: "Barbell Row", group: .back),
+        LibraryExercise(id: UUID(), name: "Deadlift", group: .back),
+        LibraryExercise(id: UUID(), name: "Pull Ups", group: .back),
+        LibraryExercise(id: UUID(), name: "Seated Cable Row", group: .back),
+        LibraryExercise(id: UUID(), name: "Single Arm Dumbbell Row", group: .back),
+        LibraryExercise(id: UUID(), name: "Straight Arm Pulldown", group: .back),
+        LibraryExercise(id: UUID(), name: "Overhead Press", group: .shoulders),
+        LibraryExercise(id: UUID(), name: "Lateral Raises", group: .shoulders),
+        LibraryExercise(id: UUID(), name: "Face Pulls", group: .shoulders),
+        LibraryExercise(id: UUID(), name: "Front Raises", group: .shoulders),
+        LibraryExercise(id: UUID(), name: "Rear Delt Fly", group: .shoulders),
+        LibraryExercise(id: UUID(), name: "Arnold Press", group: .shoulders),
+        LibraryExercise(id: UUID(), name: "Bicep Curls", group: .biceps),
+        LibraryExercise(id: UUID(), name: "Hammer Curls", group: .biceps),
+        LibraryExercise(id: UUID(), name: "Chin Ups", group: .biceps),
+        LibraryExercise(id: UUID(), name: "Preacher Curls", group: .biceps),
+        LibraryExercise(id: UUID(), name: "Concentration Curls", group: .biceps),
+        LibraryExercise(id: UUID(), name: "Tricep Pushdown", group: .triceps),
+        LibraryExercise(id: UUID(), name: "Skull Crushers", group: .triceps),
+        LibraryExercise(id: UUID(), name: "Tricep Dips", group: .triceps),
+        LibraryExercise(id: UUID(), name: "Overhead Tricep Extension", group: .triceps),
+        LibraryExercise(id: UUID(), name: "Close Grip Bench Press", group: .triceps),
+        LibraryExercise(id: UUID(), name: "Squat", group: .legs),
+        LibraryExercise(id: UUID(), name: "Leg Press", group: .legs),
+        LibraryExercise(id: UUID(), name: "Romanian Deadlift", group: .legs),
+        LibraryExercise(id: UUID(), name: "Lunges", group: .legs),
+        LibraryExercise(id: UUID(), name: "Leg Extensions", group: .legs),
+        LibraryExercise(id: UUID(), name: "Leg Curls", group: .legs),
+        LibraryExercise(id: UUID(), name: "Calf Raises", group: .legs),
+        LibraryExercise(id: UUID(), name: "Plank", group: .core),
+        LibraryExercise(id: UUID(), name: "Hanging Leg Raises", group: .core),
+        LibraryExercise(id: UUID(), name: "Cable Crunches", group: .core),
+        LibraryExercise(id: UUID(), name: "Russian Twists", group: .core),
+        LibraryExercise(id: UUID(), name: "Bicycle Crunches", group: .core),
+        LibraryExercise(id: UUID(), name: "Dead Bug", group: .core)
+    ]
 
     private func loadSessions() -> [WorkoutSession] {
         do {
@@ -463,6 +691,11 @@ struct ContentView: View {
                     Label("History", systemImage: "clock.fill")
                 }
 
+            ExerciseLibraryView(store: store)
+                .tabItem {
+                    Label("Explore", systemImage: "square.grid.2x2.fill")
+                }
+
             ProgressTabView(store: store)
                 .tabItem {
                     Label("Progress", systemImage: "chart.line.uptrend.xyaxis")
@@ -478,6 +711,11 @@ struct HomeView: View {
     @State private var editingTemplate: WorkoutTemplate?
     @State private var editingSession: WorkoutSession?
     @State private var draftFromTemplate: WorkoutTemplate?
+    @State private var isExporting = false
+    @State private var isImporting = false
+    @State private var exportDocument: BackupDocument?
+    @State private var importErrorMessage: String?
+    @State private var showImportError = false
 
     var body: some View {
         ZStack {
@@ -529,14 +767,60 @@ struct HomeView: View {
         .sheet(item: $editingTemplate) { template in
             EditTemplateView(store: store, template: template)
         }
+        .fileExporter(
+            isPresented: $isExporting,
+            document: exportDocument,
+            contentType: .json,
+            defaultFilename: "myworkout-backup"
+        ) { _ in }
+        .fileImporter(isPresented: $isImporting, allowedContentTypes: [.json]) { result in
+            switch result {
+            case .success(let url):
+                handleImport(from: url)
+            case .failure(let error):
+                importErrorMessage = error.localizedDescription
+                showImportError = true
+            }
+        }
+        .alert("Import Failed", isPresented: $showImportError) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(importErrorMessage ?? "Unable to import backup.")
+        }
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("MyWorkout")
-                .font(.custom("Avenir Next", size: 34))
-                .fontWeight(.semibold)
-                .foregroundStyle(Color("Sand"))
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .center, spacing: 12) {
+                Image("logo")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 70, height: 70)
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                Text("MyWorkout")
+                    .font(.custom("Avenir Next", size: 34))
+                    .fontWeight(.semibold)
+                    .foregroundStyle(Color("Sand"))
+                Spacer()
+                Menu {
+                    Button("Export Backup") {
+                        do {
+                            exportDocument = BackupDocument(data: try store.exportBackupData())
+                            isExporting = true
+                        } catch {
+                            importErrorMessage = error.localizedDescription
+                            showImportError = true
+                        }
+                    }
+                    Button("Import Backup") {
+                        isImporting = true
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .font(.custom("Avenir Next", size: 22))
+                        .foregroundStyle(Color("Sand"))
+                }
+            }
             Text("Track what you lift, keep it simple.")
                 .font(.custom("Avenir Next", size: 16))
                 .foregroundStyle(Color("Sand").opacity(0.7))
@@ -644,6 +928,23 @@ struct HomeView: View {
         showingAdd = true
     }
 
+    private func handleImport(from url: URL) {
+        let shouldStop = url.startAccessingSecurityScopedResource()
+        defer {
+            if shouldStop {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        do {
+            let data = try Data(contentsOf: url)
+            try store.importBackupData(data)
+        } catch {
+            importErrorMessage = error.localizedDescription
+            showImportError = true
+        }
+    }
+
     private var addButton: some View {
         Button {
             showingAdd = true
@@ -668,64 +969,80 @@ struct HomeView: View {
 struct HistoryView: View {
     @ObservedObject var store: WorkoutStore
     @State private var editingSession: WorkoutSession?
+    @State private var path: [UUID] = []
 
     var body: some View {
-        ZStack {
-            LinearGradient(
-                colors: [Color("Night"), Color("Coal")],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .ignoresSafeArea()
+        NavigationStack(path: $path) {
+            ZStack {
+                LinearGradient(
+                    colors: [Color("Night"), Color("Coal")],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                .ignoresSafeArea()
 
-            List {
-                Section {
-                    if store.sessions.isEmpty {
-                        EmptyStateView()
-                            .listRowBackground(Color.clear)
-                            .listRowSeparator(.hidden)
-                            .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 12, trailing: 20))
+                List {
+                    Section {
+                        if store.sessions.isEmpty {
+                            EmptyStateView()
+                                .listRowBackground(Color.clear)
+                                .listRowSeparator(.hidden)
+                                .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 12, trailing: 20))
                     } else {
                         ForEach(store.sessions) { session in
-                            WorkoutSessionCard(
-                                session: session,
-                                onDelete: { store.removeSession(session) },
-                                onSaveTemplate: { store.addTemplate(from: session) }
-                            )
+                            Button {
+                                path.append(session.id)
+                            } label: {
+                                WorkoutSessionCard(
+                                    session: session,
+                                    onDelete: { store.removeSession(session) },
+                                    onSaveTemplate: { store.addTemplate(from: session) }
+                                )
+                            }
+                            .buttonStyle(.plain)
                             .transition(.move(edge: .top).combined(with: .opacity))
                             .listRowBackground(Color.clear)
                             .listRowSeparator(.hidden)
                             .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 12, trailing: 20))
-                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                                Button(role: .destructive) {
-                                    store.removeSession(session)
-                                } label: {
-                                    Label("Delete", systemImage: "trash")
+                                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                    Button(role: .destructive) {
+                                        store.removeSession(session)
+                                    } label: {
+                                        Label("Delete", systemImage: "trash")
+                                    }
                                 }
-                            }
-                            .swipeActions(edge: .leading, allowsFullSwipe: false) {
-                                Button {
-                                    editingSession = session
-                                } label: {
-                                    Label("Edit", systemImage: "pencil")
+                                .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                                    Button {
+                                        editingSession = session
+                                    } label: {
+                                        Label("Edit", systemImage: "pencil")
+                                    }
+                                    .tint(Color("Sand"))
                                 }
-                                .tint(Color("Sand"))
                             }
                         }
+                    } header: {
+                        Text("History")
+                            .font(.custom("Avenir Next", size: 28))
+                            .fontWeight(.semibold)
+                            .foregroundStyle(Color("Sand"))
                     }
-                } header: {
-                    Text("History")
-                        .font(.custom("Avenir Next", size: 28))
-                        .fontWeight(.semibold)
-                        .foregroundStyle(Color("Sand"))
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets(top: 24, leading: 20, bottom: 0, trailing: 20))
                 }
-                .listRowBackground(Color.clear)
+                .listStyle(.plain)
                 .listRowSeparator(.hidden)
-                .listRowInsets(EdgeInsets(top: 24, leading: 20, bottom: 0, trailing: 20))
+                .scrollContentBackground(.hidden)
             }
-            .listStyle(.plain)
-            .listRowSeparator(.hidden)
-            .scrollContentBackground(.hidden)
+            .navigationBarTitleDisplayMode(.inline)
+            .navigationDestination(for: UUID.self) { id in
+                                if let session = store.sessions.first(where: { $0.id == id }) {
+                                    SessionDetailView(session: session) {
+                                        editingSession = session
+                                    }
+                                }
+            }
         }
         .sheet(item: $editingSession) { session in
             AddWorkoutView(store: store, template: nil, session: session)
@@ -1280,54 +1597,125 @@ struct AddWorkoutView: View {
     @State private var drafts: [ExerciseDraft] = []
     @State private var hasLoadedDrafts = false
 
-    private var validExercises: [WorkoutExercise] {
-        drafts.compactMap { draft in
+    private var validation: (validExercises: [WorkoutExercise], hasInvalid: Bool) {
+        var validExercises: [WorkoutExercise] = []
+        var hasInvalid = false
+
+        for draft in drafts {
             let name = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !name.isEmpty else { return nil }
             switch draft.type {
             case .weights:
-                let setModels: [WorkoutSet] = draft.sets.compactMap { setDraft in
-                    let inputValue = Double(setDraft.weight) ?? 0
+                var setModels: [WorkoutSet] = []
+                var hasPartialSet = false
+
+                for setDraft in draft.sets {
+                    let weightText = setDraft.weight.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let repsText = setDraft.reps.trimmingCharacters(in: .whitespacesAndNewlines)
+
+                    if weightText.isEmpty && repsText.isEmpty {
+                        continue
+                    }
+
+                    if weightText.isEmpty || repsText.isEmpty {
+                        hasPartialSet = true
+                        continue
+                    }
+
+                    guard let inputValue = Double(weightText),
+                          let repsValue = Int(repsText) else {
+                        hasPartialSet = true
+                        continue
+                    }
+
                     let weightValue = draft.weightUnit == .lb ? inputValue * 0.45359237 : inputValue
-                    let repsValue = Int(setDraft.reps) ?? 0
-                    guard repsValue > 0, weightValue >= 0 else { return nil }
-                    return WorkoutSet(id: UUID(), weightKg: weightValue, reps: repsValue)
+                    guard repsValue > 0, weightValue > 0 else {
+                        hasPartialSet = true
+                        continue
+                    }
+
+                    setModels.append(WorkoutSet(id: UUID(), weightKg: weightValue, reps: repsValue))
                 }
-                guard !setModels.isEmpty, setModels.count == draft.sets.count else { return nil }
-                return WorkoutExercise(
-                    id: UUID(),
-                    name: name,
-                    type: .weights,
-                    sets: setModels,
-                    durationMinutes: nil,
-                    calories: nil
+
+                let hasAnySetInput = draft.sets.contains {
+                    !$0.weight.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                    !$0.reps.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                }
+
+                if hasPartialSet {
+                    hasInvalid = true
+                    continue
+                }
+
+                if name.isEmpty && hasAnySetInput {
+                    hasInvalid = true
+                    continue
+                }
+
+                guard !setModels.isEmpty else {
+                    continue
+                }
+
+                guard !name.isEmpty else {
+                    hasInvalid = true
+                    continue
+                }
+
+                validExercises.append(
+                    WorkoutExercise(
+                        id: UUID(),
+                        name: name,
+                        type: .weights,
+                        sets: setModels,
+                        durationMinutes: nil,
+                        calories: nil
+                    )
                 )
             case .cardio:
-                let durationValue = draft.durationMinutes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    ? nil
-                    : Int(draft.durationMinutes)
-                let caloriesValue = draft.calories.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    ? nil
-                    : Int(draft.calories)
+                let durationTrimmed = draft.durationMinutes.trimmingCharacters(in: .whitespacesAndNewlines)
+                let caloriesTrimmed = draft.calories.trimmingCharacters(in: .whitespacesAndNewlines)
+                let durationValue = durationTrimmed.isEmpty ? nil : Int(durationTrimmed)
+                let caloriesValue = caloriesTrimmed.isEmpty ? nil : Int(caloriesTrimmed)
+                let hasMetrics = durationValue != nil || caloriesValue != nil
 
-                if let durationValue, durationValue <= 0 { return nil }
-                if let caloriesValue, caloriesValue <= 0 { return nil }
-                guard durationValue != nil || caloriesValue != nil else { return nil }
+                if name.isEmpty && (!durationTrimmed.isEmpty || !caloriesTrimmed.isEmpty) {
+                    hasInvalid = true
+                    continue
+                }
 
-                return WorkoutExercise(
-                    id: UUID(),
-                    name: name,
-                    type: .cardio,
-                    sets: [],
-                    durationMinutes: durationValue,
-                    calories: caloriesValue
+                if let durationValue, durationValue <= 0 { hasInvalid = true; continue }
+                if let caloriesValue, caloriesValue <= 0 { hasInvalid = true; continue }
+
+                if name.isEmpty && !hasMetrics {
+                    continue
+                }
+
+                guard hasMetrics, !name.isEmpty else {
+                    hasInvalid = true
+                    continue
+                }
+
+                validExercises.append(
+                    WorkoutExercise(
+                        id: UUID(),
+                        name: name,
+                        type: .cardio,
+                        sets: [],
+                        durationMinutes: durationValue,
+                        calories: caloriesValue
+                    )
                 )
             }
         }
+
+        return (validExercises, hasInvalid)
+    }
+
+    private var validExercises: [WorkoutExercise] {
+        validation.validExercises
     }
 
     private var canSave: Bool {
-        !drafts.isEmpty && validExercises.count == drafts.count
+        !drafts.isEmpty && !validExercises.isEmpty && !validation.hasInvalid
     }
 
     private var titleText: String {
@@ -1423,7 +1811,7 @@ struct AddWorkoutView: View {
     }
 
     private func drafts(for session: WorkoutSession) -> [ExerciseDraft] {
-        session.exercises.map { exercise in
+        session.mergedExercises().map { exercise in
             switch exercise.type {
             case .weights:
                 let setDrafts = exercise.sets.map {
@@ -1535,23 +1923,29 @@ struct ExerciseEditorRow: View {
                 text: $draft.name,
                 suggestions: suggestions
             )
+            .zIndex(2)
 
             if showsMetrics {
                 if draft.type == .weights {
                     ForEach($draft.sets) { $set in
                         let setId = $set.wrappedValue.id
-                        HStack(alignment: .top, spacing: 12) {
+                        HStack(alignment: .center, spacing: 12) {
                             InputCard(title: "Reps", text: $set.reps, placeholder: "10", keyboard: .numberPad)
                             InputCard(title: "Weight", text: $set.weight, placeholder: "10", keyboard: .decimalPad)
                             UnitPillAligned(unit: $draft.weightUnit)
                             if draft.sets.count > 1 {
-                                Button(role: .destructive) {
-                                    draft.sets.removeAll { $0.id == setId }
-                                } label: {
-                                    Image(systemName: "minus.circle.fill")
-                                        .foregroundStyle(Color("Sand").opacity(0.7))
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Unit")
+                                        .font(.custom("Avenir Next", size: 12))
+                                        .foregroundStyle(.clear)
+                                    Button(role: .destructive) {
+                                        draft.sets.removeAll { $0.id == setId }
+                                    } label: {
+                                        Image(systemName: "minus.circle.fill")
+                                            .foregroundStyle(Color("Sand").opacity(0.7))
+                                    }
+                                    .frame(width: 32, height: 32)
                                 }
-                                .padding(.top, 18)
                             }
                         }
                         .padding(10)
@@ -1592,7 +1986,7 @@ struct ExerciseEditorRow: View {
         .onAppear {
             lastUnit = draft.weightUnit
         }
-        .onChange(of: draft.weightUnit) { newValue in
+        .onChange(of: draft.weightUnit) { _, newValue in
             guard lastUnit != newValue else { return }
             convertWeights(from: lastUnit, to: newValue)
             lastUnit = newValue
@@ -1642,8 +2036,9 @@ struct WorkoutSessionCard: View {
     }
 
     var body: some View {
-        let weightExercises = session.exercises.filter { $0.type == .weights }
-        let cardioExercises = session.exercises.filter { $0.type == .cardio }
+        let mergedExercises = session.mergedExercises()
+        let weightExercises = mergedExercises.filter { $0.type == .weights }
+        let cardioExercises = mergedExercises.filter { $0.type == .cardio }
         let totalSets = weightExercises.reduce(0) { $0 + $1.sets.count }
         VStack(alignment: .leading, spacing: 10) {
             HStack {
@@ -1652,7 +2047,7 @@ struct WorkoutSessionCard: View {
                     .fontWeight(.semibold)
                     .foregroundStyle(Color("Sand"))
                 Spacer()
-                Text("\(session.exercises.count) exercises")
+                Text("\(mergedExercises.count) exercises")
                     .font(.custom("Avenir Next", size: 12))
                     .foregroundStyle(Color("Sand").opacity(0.6))
             }
@@ -1664,16 +2059,16 @@ struct WorkoutSessionCard: View {
                 if !cardioExercises.isEmpty {
                     TagView(text: "\(cardioExercises.count) cardio")
                 }
-                if let first = session.exercises.first {
+                if let first = mergedExercises.first {
                     TagView(text: first.name)
                 }
-                if session.exercises.count > 1 {
-                    TagView(text: "+\(session.exercises.count - 1) more")
+                if mergedExercises.count > 1 {
+                    TagView(text: "+\(mergedExercises.count - 1) more")
                 }
             }
 
             VStack(alignment: .leading, spacing: 6) {
-                ForEach(session.exercises.prefix(3)) { exercise in
+                ForEach(mergedExercises.prefix(3)) { exercise in
                     Text(sessionLine(for: exercise))
                         .font(.custom("Avenir Next", size: 12))
                         .foregroundStyle(Color("Sand").opacity(0.6))
@@ -1722,6 +2117,104 @@ struct WorkoutSessionCard: View {
             }
             return "\(exercise.name) - \(details.joined(separator: ", "))"
         }
+    }
+}
+
+struct SessionDetailView: View {
+    let session: WorkoutSession
+    let onEdit: () -> Void
+
+    var body: some View {
+        ZStack {
+            LinearGradient(
+                colors: [Color("Night"), Color("Coal")],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text(session.date.formatted(date: .abbreviated, time: .omitted))
+                        .font(.custom("Avenir Next", size: 28))
+                        .fontWeight(.semibold)
+                        .foregroundStyle(Color("Sand"))
+
+                    ForEach(session.mergedExercises()) { exercise in
+                        ExerciseDetailCard(exercise: exercise)
+                    }
+                }
+                .padding(24)
+            }
+        }
+        .navigationTitle("Session")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Edit") {
+                    onEdit()
+                }
+                .foregroundStyle(Color("Sand"))
+            }
+        }
+    }
+}
+
+struct ExerciseDetailCard: View {
+    let exercise: WorkoutExercise
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text(exercise.name)
+                    .font(.custom("Avenir Next", size: 18))
+                    .fontWeight(.semibold)
+                    .foregroundStyle(Color("Sand"))
+                Spacer()
+                Text(exercise.type.label)
+                    .font(.custom("Avenir Next", size: 12))
+                    .foregroundStyle(Color("Sand").opacity(0.6))
+            }
+
+            switch exercise.type {
+            case .weights:
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(Array(exercise.sets.enumerated()), id: \.element.id) { index, set in
+                        Text("Set \(index + 1): \(formattedWeight(set.weightKg)) kg x \(set.reps)")
+                            .font(.custom("Avenir Next", size: 13))
+                            .foregroundStyle(Color("Sand").opacity(0.7))
+                    }
+                }
+            case .cardio:
+                VStack(alignment: .leading, spacing: 6) {
+                    if let minutes = exercise.durationMinutes, minutes > 0 {
+                        Text("Duration: \(minutes) min")
+                            .font(.custom("Avenir Next", size: 13))
+                            .foregroundStyle(Color("Sand").opacity(0.7))
+                    }
+                    if let calories = exercise.calories, calories > 0 {
+                        Text("Calories: \(calories) cal")
+                            .font(.custom("Avenir Next", size: 13))
+                            .foregroundStyle(Color("Sand").opacity(0.7))
+                    }
+                }
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 18)
+                .fill(Color("Card"))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18)
+                        .stroke(Color("Sand").opacity(0.08), lineWidth: 1)
+                )
+        )
+    }
+
+    private func formattedWeight(_ kg: Double) -> String {
+        if kg == 0 { return "0" }
+        return String(format: "%.1f", kg)
     }
 }
 
@@ -1787,46 +2280,194 @@ struct ExerciseNameField: View {
                     .font(.custom("Avenir Next", size: 11))
                     .foregroundStyle(Color("Sand").opacity(0.6))
             }
-            TextField("Bicep Curls", text: $text)
-                .font(.custom("Avenir Next", size: 18))
-                .textInputAutocapitalization(.words)
-                .foregroundStyle(Color("Sand"))
-                .padding(12)
-                .background(
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(Color("Card").opacity(0.8))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 12)
-                                .stroke(
-                                    isFocused ? Color("Sand").opacity(0.35) : Color("Sand").opacity(0.12),
-                                    lineWidth: 1
-                                )
-                        )
-                )
-                .focused($isFocused)
+            ZStack(alignment: .topLeading) {
+                TextField("Bicep Curls", text: $text)
+                    .font(.custom("Avenir Next", size: 18))
+                    .textInputAutocapitalization(.words)
+                    .foregroundStyle(Color("Sand"))
+                    .padding(12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(Color("Card").opacity(0.8))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .stroke(
+                                        isFocused ? Color("Sand").opacity(0.35) : Color("Sand").opacity(0.12),
+                                        lineWidth: 1
+                                    )
+                            )
+                    )
+                    .focused($isFocused)
 
-            if isFocused && !matches.isEmpty {
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(matches, id: \.self) { name in
-                        Button {
-                            text = name
-                            isFocused = false
-                        } label: {
-                            Text(name)
-                                .font(.custom("Avenir Next", size: 13))
-                                .foregroundStyle(Color("Sand"))
-                                .padding(.vertical, 4)
-                                .frame(maxWidth: .infinity, alignment: .leading)
+                if isFocused && !matches.isEmpty {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(matches, id: \.self) { name in
+                                Button {
+                                    text = name
+                                    isFocused = false
+                                } label: {
+                                    Text(name)
+                                        .font(.custom("Avenir Next", size: 13))
+                                        .foregroundStyle(Color("Sand"))
+                                        .padding(.vertical, 6)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                                .buttonStyle(.plain)
+                            }
                         }
+                        .padding(10)
                     }
+                    .frame(maxHeight: 160)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(Color("Card").opacity(0.98))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .stroke(Color("Sand").opacity(0.12), lineWidth: 1)
+                            )
+                    )
+                    .shadow(color: Color.black.opacity(0.25), radius: 12, x: 0, y: 8)
+                    .offset(y: 54)
+                    .zIndex(3)
                 }
-                .padding(8)
-                .background(
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(Color("Card").opacity(0.95))
-                )
             }
+            .zIndex(3)
         }
+    }
+}
+
+struct ExerciseLibraryView: View {
+    @ObservedObject var store: WorkoutStore
+    @State private var searchText = ""
+    @State private var showingAdd = false
+    @State private var draftTemplate: WorkoutTemplate?
+
+    private var groupedExercises: [MuscleGroup: [LibraryExercise]] {
+        let filtered = store.exerciseLibrary.filter { exercise in
+            let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !query.isEmpty else { return true }
+            return exercise.name.lowercased().contains(query.lowercased())
+        }
+        return Dictionary(grouping: filtered, by: \.group)
+    }
+
+    private var orderedGroups: [MuscleGroup] {
+        MuscleGroup.allCases.filter { group in
+            (groupedExercises[group] ?? []).isEmpty == false
+        }
+    }
+
+    var body: some View {
+        ZStack {
+            LinearGradient(
+                colors: [Color("Night"), Color("Coal")],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
+
+            List {
+                Section {
+                    HStack {
+                        Image(systemName: "magnifyingglass")
+                            .foregroundStyle(Color("Sand").opacity(0.6))
+                        TextField("Search exercises", text: $searchText)
+                            .font(.custom("Avenir Next", size: 16))
+                            .foregroundStyle(Color("Sand"))
+                    }
+                    .padding(12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14)
+                            .fill(Color("Card"))
+                    )
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                } header: {
+                    Text("Explore")
+                        .font(.custom("Avenir Next", size: 28))
+                        .fontWeight(.semibold)
+                        .foregroundStyle(Color("Sand"))
+                }
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+                .listRowInsets(EdgeInsets(top: 24, leading: 20, bottom: 6, trailing: 20))
+
+                ForEach(orderedGroups, id: \.self) { group in
+                    Section {
+                        ForEach(groupedExercises[group] ?? []) { exercise in
+                            Button {
+                                startQuickWorkout(for: exercise.name)
+                            } label: {
+                                HStack {
+                                    Text(exercise.name)
+                                        .font(.custom("Avenir Next", size: 16))
+                                        .foregroundStyle(Color("Sand"))
+                                    Spacer()
+                                    Image(systemName: "figure.strengthtraining.traditional")
+                                        .font(.custom("Avenir Next", size: 14))
+                                        .foregroundStyle(Color("Sand").opacity(0.35))
+                                }
+                                .padding(.vertical, 10)
+                                .padding(.horizontal, 14)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 14)
+                                        .fill(Color("Card").opacity(0.9))
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 14)
+                                                .stroke(Color("Sand").opacity(0.08), lineWidth: 1)
+                                        )
+                                )
+                            }
+                            .buttonStyle(.plain)
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
+                            .listRowInsets(EdgeInsets(top: 6, leading: 20, bottom: 6, trailing: 20))
+                        }
+                    } header: {
+                        HStack(spacing: 10) {
+                            Capsule()
+                                .fill(Color("Sand").opacity(0.18))
+                                .frame(width: 18, height: 6)
+                            Text(group.rawValue.uppercased())
+                                .font(.custom("Avenir Next", size: 13))
+                                .fontWeight(.semibold)
+                                .foregroundStyle(Color("Sand").opacity(0.75))
+                        }
+                        .padding(.top, 8)
+                    }
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets(top: 12, leading: 20, bottom: 0, trailing: 20))
+                }
+            }
+            .listStyle(.plain)
+            .listRowSeparator(.hidden)
+            .scrollContentBackground(.hidden)
+        }
+        .sheet(isPresented: $showingAdd, onDismiss: { draftTemplate = nil }) {
+            AddWorkoutView(store: store, template: draftTemplate, session: nil)
+        }
+    }
+
+    private func startQuickWorkout(for name: String) {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else { return }
+        draftTemplate = WorkoutTemplate(
+            id: UUID(),
+            title: "Explore",
+            exercises: [
+                TemplateExercise(
+                    id: UUID(),
+                    name: trimmedName,
+                    type: .weights,
+                    weightKg: nil,
+                    sets: nil,
+                    repsPerSet: nil
+                )
+            ]
+        )
+        showingAdd = true
     }
 }
 
