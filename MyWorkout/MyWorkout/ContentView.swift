@@ -268,7 +268,7 @@ final class WorkoutStore: ObservableObject {
     @Published private(set) var templates: [WorkoutTemplate] = []
     @Published private(set) var exerciseLibrary: [LibraryExercise] = WorkoutStore.defaultLibrary
     private var hasLoaded = false
-    private var exerciseTypeMap: [String: ExerciseType] = [:]
+    @Published private var exerciseTypeMap: [String: ExerciseType] = [:]
 
     init() {
         load()
@@ -2107,8 +2107,11 @@ struct ExerciseEditorRow: View {
                 Text("Exercise")
                     .font(.custom("Avenir Next", size: 15))
                     .foregroundStyle(Color("Sand").opacity(0.6))
+                let trimmedName = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
                 if let knownType {
                     typeBadge(for: knownType)
+                } else if trimmedName.isEmpty {
+                    typePlaceholder
                 } else {
                     typePicker
                 }
@@ -2215,6 +2218,11 @@ struct ExerciseEditorRow: View {
                 draft.type = newValue
             }
         }
+        .onChange(of: draft.name) { _, _ in
+            if let knownType {
+                draft.type = knownType
+            }
+        }
     }
 
     private var typePicker: some View {
@@ -2256,6 +2264,18 @@ struct ExerciseEditorRow: View {
             .background(
                 Capsule()
                     .fill(Color("Sand").opacity(0.12))
+            )
+    }
+
+    private var typePlaceholder: some View {
+        Text("Type")
+            .font(.custom("Avenir Next", size: 12))
+            .foregroundStyle(Color("Sand").opacity(0.5))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(
+                Capsule()
+                    .fill(Color("Sand").opacity(0.08))
             )
     }
 }
@@ -2576,7 +2596,6 @@ struct ExerciseNameField: View {
 struct ExerciseLibraryView: View {
     @ObservedObject var store: WorkoutStore
     @State private var searchText = ""
-    @State private var showingAdd = false
     @State private var draftTemplate: WorkoutTemplate?
 
     private var groupedExercises: [MuscleGroup: [LibraryExercise]] {
@@ -2681,8 +2700,8 @@ struct ExerciseLibraryView: View {
             .listRowSeparator(.hidden)
             .scrollContentBackground(.hidden)
         }
-        .sheet(isPresented: $showingAdd, onDismiss: { draftTemplate = nil }) {
-            AddWorkoutView(store: store, template: draftTemplate, session: nil)
+        .sheet(item: $draftTemplate) { template in
+            AddWorkoutView(store: store, template: template, session: nil)
         }
     }
 
@@ -2704,7 +2723,6 @@ struct ExerciseLibraryView: View {
                 )
             ]
         )
-        showingAdd = true
     }
 }
 
