@@ -234,6 +234,7 @@ struct LibraryExercise: Identifiable, Codable, Equatable {
     let id: UUID
     let name: String
     let group: MuscleGroup
+    let type: ExerciseType
 }
 
 struct WorkoutBackup: Codable {
@@ -266,6 +267,7 @@ final class WorkoutStore: ObservableObject {
     @Published private(set) var templates: [WorkoutTemplate] = []
     @Published private(set) var exerciseLibrary: [LibraryExercise] = WorkoutStore.defaultLibrary
     private var hasLoaded = false
+    private var exerciseTypeMap: [String: ExerciseType] = [:]
 
     init() {
         load()
@@ -281,6 +283,7 @@ final class WorkoutStore: ObservableObject {
                 exercises: mergedExercises
             )
             sessions[index] = merged
+            updateExerciseTypes(from: mergedExercises)
         } else {
             let session = WorkoutSession(
                 id: UUID(),
@@ -288,6 +291,7 @@ final class WorkoutStore: ObservableObject {
                 exercises: exercises
             )
             sessions.insert(session, at: 0)
+            updateExerciseTypes(from: exercises)
         }
         sessions.sort { $0.date > $1.date }
         saveSessions()
@@ -352,6 +356,7 @@ final class WorkoutStore: ObservableObject {
         let mergedExercises = mergeExercises(existing: [], incoming: exercises)
         sessions[index] = WorkoutSession(id: id, date: date, exercises: mergedExercises)
         sessions.sort { $0.date > $1.date }
+        updateExerciseTypes(from: mergedExercises)
         saveSessions()
     }
 
@@ -367,12 +372,14 @@ final class WorkoutStore: ObservableObject {
             exercises: exercises
         )
         templates.insert(template, at: 0)
+        updateExerciseTypes(from: exercises)
         saveTemplates()
     }
 
     func updateTemplate(id: UUID, title: String, exercises: [TemplateExercise]) {
         guard let index = templates.firstIndex(where: { $0.id == id }) else { return }
         templates[index] = WorkoutTemplate(id: id, title: title, exercises: exercises)
+        updateExerciseTypes(from: exercises)
         saveTemplates()
     }
 
@@ -498,6 +505,20 @@ final class WorkoutStore: ObservableObject {
         importBackup(backup)
     }
 
+    func resetAllData() {
+        sessions = []
+        templates = []
+        exerciseTypeMap = [:]
+        saveSessions()
+        saveTemplates()
+        saveExerciseTypes()
+
+        let urls = [sessionsFileURL(), templatesFileURL(), exerciseTypesFileURL()]
+        for url in urls {
+            try? FileManager.default.removeItem(at: url)
+        }
+    }
+
     private func formattedOptionalInt(_ value: Int?) -> String {
         guard let value else { return "" }
         return "\(value)"
@@ -506,52 +527,142 @@ final class WorkoutStore: ObservableObject {
     private func load() {
         sessions = loadSessions()
         templates = loadTemplates()
+        exerciseTypeMap = loadExerciseTypes()
         hasLoaded = true
+        let sessionExercises = sessions.flatMap { $0.exercises }
+        updateExerciseTypes(from: sessionExercises)
+        let templateExercises = templates.flatMap { $0.exercises }
+        updateExerciseTypes(from: templateExercises)
+        updateExerciseTypes(from: exerciseLibrary)
+    }
+
+    func exerciseType(for name: String) -> ExerciseType? {
+        let key = normalizedExerciseKey(name)
+        guard !key.isEmpty else { return nil }
+        return exerciseTypeMap[key]
+    }
+
+    private func updateExerciseTypes(from exercises: [WorkoutExercise]) {
+        var changed = false
+        for exercise in exercises {
+            let key = normalizedExerciseKey(exercise.name)
+            guard !key.isEmpty else { continue }
+            if exerciseTypeMap[key] != exercise.type {
+                exerciseTypeMap[key] = exercise.type
+                changed = true
+            }
+        }
+        if changed {
+            saveExerciseTypes()
+        }
+    }
+
+    private func updateExerciseTypes(from templates: [TemplateExercise]) {
+        var changed = false
+        for exercise in templates {
+            let key = normalizedExerciseKey(exercise.name)
+            guard !key.isEmpty else { continue }
+            if exerciseTypeMap[key] != exercise.type {
+                exerciseTypeMap[key] = exercise.type
+                changed = true
+            }
+        }
+        if changed {
+            saveExerciseTypes()
+        }
+    }
+
+    private func updateExerciseTypes(from library: [LibraryExercise]) {
+        var changed = false
+        for exercise in library {
+            let key = normalizedExerciseKey(exercise.name)
+            guard !key.isEmpty else { continue }
+            if exerciseTypeMap[key] != exercise.type {
+                exerciseTypeMap[key] = exercise.type
+                changed = true
+            }
+        }
+        if changed {
+            saveExerciseTypes()
+        }
+    }
+
+    private func normalizedExerciseKey(_ name: String) -> String {
+        name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    private func loadExerciseTypes() -> [String: ExerciseType] {
+        do {
+            let data = try Data(contentsOf: exerciseTypesFileURL())
+            return try JSONDecoder().decode([String: ExerciseType].self, from: data)
+        } catch {
+            return [:]
+        }
+    }
+
+    private func saveExerciseTypes() {
+        guard hasLoaded else { return }
+        do {
+            let data = try JSONEncoder().encode(exerciseTypeMap)
+            let url = exerciseTypesFileURL()
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true,
+                attributes: nil
+            )
+            try data.write(to: url, options: [.atomic])
+        } catch {
+            // Ignore write failures; user can continue without persistence.
+        }
     }
 
     private static let defaultLibrary: [LibraryExercise] = [
-        LibraryExercise(id: UUID(), name: "Bench Press", group: .chest),
-        LibraryExercise(id: UUID(), name: "Push Ups", group: .chest),
-        LibraryExercise(id: UUID(), name: "Incline Dumbbell Press", group: .chest),
-        LibraryExercise(id: UUID(), name: "Chest Fly", group: .chest),
-        LibraryExercise(id: UUID(), name: "Dips", group: .chest),
-        LibraryExercise(id: UUID(), name: "Cable Crossover", group: .chest),
-        LibraryExercise(id: UUID(), name: "Lat Pulldown", group: .back),
-        LibraryExercise(id: UUID(), name: "Barbell Row", group: .back),
-        LibraryExercise(id: UUID(), name: "Deadlift", group: .back),
-        LibraryExercise(id: UUID(), name: "Pull Ups", group: .back),
-        LibraryExercise(id: UUID(), name: "Seated Cable Row", group: .back),
-        LibraryExercise(id: UUID(), name: "Single Arm Dumbbell Row", group: .back),
-        LibraryExercise(id: UUID(), name: "Straight Arm Pulldown", group: .back),
-        LibraryExercise(id: UUID(), name: "Overhead Press", group: .shoulders),
-        LibraryExercise(id: UUID(), name: "Lateral Raises", group: .shoulders),
-        LibraryExercise(id: UUID(), name: "Face Pulls", group: .shoulders),
-        LibraryExercise(id: UUID(), name: "Front Raises", group: .shoulders),
-        LibraryExercise(id: UUID(), name: "Rear Delt Fly", group: .shoulders),
-        LibraryExercise(id: UUID(), name: "Arnold Press", group: .shoulders),
-        LibraryExercise(id: UUID(), name: "Bicep Curls", group: .biceps),
-        LibraryExercise(id: UUID(), name: "Hammer Curls", group: .biceps),
-        LibraryExercise(id: UUID(), name: "Chin Ups", group: .biceps),
-        LibraryExercise(id: UUID(), name: "Preacher Curls", group: .biceps),
-        LibraryExercise(id: UUID(), name: "Concentration Curls", group: .biceps),
-        LibraryExercise(id: UUID(), name: "Tricep Pushdown", group: .triceps),
-        LibraryExercise(id: UUID(), name: "Skull Crushers", group: .triceps),
-        LibraryExercise(id: UUID(), name: "Tricep Dips", group: .triceps),
-        LibraryExercise(id: UUID(), name: "Overhead Tricep Extension", group: .triceps),
-        LibraryExercise(id: UUID(), name: "Close Grip Bench Press", group: .triceps),
-        LibraryExercise(id: UUID(), name: "Squat", group: .legs),
-        LibraryExercise(id: UUID(), name: "Leg Press", group: .legs),
-        LibraryExercise(id: UUID(), name: "Romanian Deadlift", group: .legs),
-        LibraryExercise(id: UUID(), name: "Lunges", group: .legs),
-        LibraryExercise(id: UUID(), name: "Leg Extensions", group: .legs),
-        LibraryExercise(id: UUID(), name: "Leg Curls", group: .legs),
-        LibraryExercise(id: UUID(), name: "Calf Raises", group: .legs),
-        LibraryExercise(id: UUID(), name: "Plank", group: .core),
-        LibraryExercise(id: UUID(), name: "Hanging Leg Raises", group: .core),
-        LibraryExercise(id: UUID(), name: "Cable Crunches", group: .core),
-        LibraryExercise(id: UUID(), name: "Russian Twists", group: .core),
-        LibraryExercise(id: UUID(), name: "Bicycle Crunches", group: .core),
-        LibraryExercise(id: UUID(), name: "Dead Bug", group: .core)
+        LibraryExercise(id: UUID(), name: "Bench Press", group: .chest, type: .weights),
+        LibraryExercise(id: UUID(), name: "Push Ups", group: .chest, type: .weights),
+        LibraryExercise(id: UUID(), name: "Incline Dumbbell Press", group: .chest, type: .weights),
+        LibraryExercise(id: UUID(), name: "Chest Fly", group: .chest, type: .weights),
+        LibraryExercise(id: UUID(), name: "Dips", group: .chest, type: .weights),
+        LibraryExercise(id: UUID(), name: "Cable Crossover", group: .chest, type: .weights),
+        LibraryExercise(id: UUID(), name: "Lat Pulldown", group: .back, type: .weights),
+        LibraryExercise(id: UUID(), name: "Barbell Row", group: .back, type: .weights),
+        LibraryExercise(id: UUID(), name: "Deadlift", group: .back, type: .weights),
+        LibraryExercise(id: UUID(), name: "Pull Ups", group: .back, type: .weights),
+        LibraryExercise(id: UUID(), name: "Seated Cable Row", group: .back, type: .weights),
+        LibraryExercise(id: UUID(), name: "Single Arm Dumbbell Row", group: .back, type: .weights),
+        LibraryExercise(id: UUID(), name: "Straight Arm Pulldown", group: .back, type: .weights),
+        LibraryExercise(id: UUID(), name: "Overhead Press", group: .shoulders, type: .weights),
+        LibraryExercise(id: UUID(), name: "Lateral Raises", group: .shoulders, type: .weights),
+        LibraryExercise(id: UUID(), name: "Face Pulls", group: .shoulders, type: .weights),
+        LibraryExercise(id: UUID(), name: "Front Raises", group: .shoulders, type: .weights),
+        LibraryExercise(id: UUID(), name: "Rear Delt Fly", group: .shoulders, type: .weights),
+        LibraryExercise(id: UUID(), name: "Arnold Press", group: .shoulders, type: .weights),
+        LibraryExercise(id: UUID(), name: "Bicep Curls", group: .biceps, type: .weights),
+        LibraryExercise(id: UUID(), name: "Hammer Curls", group: .biceps, type: .weights),
+        LibraryExercise(id: UUID(), name: "Chin Ups", group: .biceps, type: .weights),
+        LibraryExercise(id: UUID(), name: "Preacher Curls", group: .biceps, type: .weights),
+        LibraryExercise(id: UUID(), name: "Concentration Curls", group: .biceps, type: .weights),
+        LibraryExercise(id: UUID(), name: "Tricep Pushdown", group: .triceps, type: .weights),
+        LibraryExercise(id: UUID(), name: "Skull Crushers", group: .triceps, type: .weights),
+        LibraryExercise(id: UUID(), name: "Tricep Dips", group: .triceps, type: .weights),
+        LibraryExercise(id: UUID(), name: "Overhead Tricep Extension", group: .triceps, type: .weights),
+        LibraryExercise(id: UUID(), name: "Close Grip Bench Press", group: .triceps, type: .weights),
+        LibraryExercise(id: UUID(), name: "Squat", group: .legs, type: .weights),
+        LibraryExercise(id: UUID(), name: "Leg Press", group: .legs, type: .weights),
+        LibraryExercise(id: UUID(), name: "Romanian Deadlift", group: .legs, type: .weights),
+        LibraryExercise(id: UUID(), name: "Lunges", group: .legs, type: .weights),
+        LibraryExercise(id: UUID(), name: "Leg Extensions", group: .legs, type: .weights),
+        LibraryExercise(id: UUID(), name: "Leg Curls", group: .legs, type: .weights),
+        LibraryExercise(id: UUID(), name: "Calf Raises", group: .legs, type: .weights),
+        LibraryExercise(id: UUID(), name: "Plank", group: .core, type: .weights),
+        LibraryExercise(id: UUID(), name: "Hanging Leg Raises", group: .core, type: .weights),
+        LibraryExercise(id: UUID(), name: "Cable Crunches", group: .core, type: .weights),
+        LibraryExercise(id: UUID(), name: "Russian Twists", group: .core, type: .weights),
+        LibraryExercise(id: UUID(), name: "Bicycle Crunches", group: .core, type: .weights),
+        LibraryExercise(id: UUID(), name: "Dead Bug", group: .core, type: .weights),
+        LibraryExercise(id: UUID(), name: "Treadmill", group: .legs, type: .cardio),
+        LibraryExercise(id: UUID(), name: "Cycling", group: .legs, type: .cardio),
+        LibraryExercise(id: UUID(), name: "Rowing", group: .back, type: .cardio),
+        LibraryExercise(id: UUID(), name: "Jump Rope", group: .legs, type: .cardio)
     ]
 
     private func loadSessions() -> [WorkoutSession] {
@@ -658,6 +769,11 @@ final class WorkoutStore: ObservableObject {
         return base.appendingPathComponent("MyWorkout/templates.json")
     }
 
+    private func exerciseTypesFileURL() -> URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        return base.appendingPathComponent("MyWorkout/exercise-types.json")
+    }
+
     private struct LegacyWorkoutEntry: Codable {
         let id: UUID
         let name: String
@@ -716,6 +832,7 @@ struct HomeView: View {
     @State private var exportDocument: BackupDocument?
     @State private var importErrorMessage: String?
     @State private var showImportError = false
+    @State private var showResetConfirm = false
 
     var body: some View {
         ZStack {
@@ -787,6 +904,14 @@ struct HomeView: View {
         } message: {
             Text(importErrorMessage ?? "Unable to import backup.")
         }
+        .alert("Reset All Data?", isPresented: $showResetConfirm) {
+            Button("Cancel", role: .cancel) {}
+            Button("Reset", role: .destructive) {
+                store.resetAllData()
+            }
+        } message: {
+            Text("This will permanently delete all workouts, templates, and exercise types on this device.")
+        }
     }
 
     private var header: some View {
@@ -814,6 +939,11 @@ struct HomeView: View {
                     }
                     Button("Import Backup") {
                         isImporting = true
+                    }
+                    Button(role: .destructive) {
+                        showResetConfirm = true
+                    } label: {
+                        Label("Reset All Data", systemImage: "trash")
                     }
                 } label: {
                     Image(systemName: "ellipsis.circle")
@@ -1770,6 +1900,7 @@ struct AddWorkoutView: View {
                                 draft: $draft,
                                 suggestions: store.exerciseNameCatalog(),
                                 showsMetrics: true,
+                                knownType: store.exerciseType(for: draft.name),
                                 onDelete: {
                                     drafts.removeAll { $0.id == draft.id }
                                 },
@@ -1904,6 +2035,7 @@ struct ExerciseEditorRow: View {
     @Binding var draft: ExerciseDraft
     let suggestions: [String]
     let showsMetrics: Bool
+    let knownType: ExerciseType?
     let onDelete: () -> Void
     let onMoveUp: (() -> Void)?
     let onMoveDown: (() -> Void)?
@@ -1915,7 +2047,11 @@ struct ExerciseEditorRow: View {
                 Text("Exercise")
                     .font(.custom("Avenir Next", size: 15))
                     .foregroundStyle(Color("Sand").opacity(0.6))
-                typePicker
+                if let knownType {
+                    typeBadge(for: knownType)
+                } else {
+                    typePicker
+                }
                 Spacer()
                 if let onMoveUp {
                     Button(action: onMoveUp) {
@@ -2005,11 +2141,19 @@ struct ExerciseEditorRow: View {
         )
         .onAppear {
             lastUnit = draft.weightUnit
+            if let knownType {
+                draft.type = knownType
+            }
         }
         .onChange(of: draft.weightUnit) { _, newValue in
             guard lastUnit != newValue else { return }
             convertWeights(from: lastUnit, to: newValue)
             lastUnit = newValue
+        }
+        .onChange(of: knownType) { _, newValue in
+            if let newValue {
+                draft.type = newValue
+            }
         }
     }
 
@@ -2041,6 +2185,18 @@ struct ExerciseEditorRow: View {
                 reps: set.reps
             )
         }
+    }
+
+    private func typeBadge(for type: ExerciseType) -> some View {
+        Text(type.label)
+            .font(.custom("Avenir Next", size: 12))
+            .foregroundStyle(Color("Sand"))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(
+                Capsule()
+                    .fill(Color("Sand").opacity(0.12))
+            )
     }
 }
 
@@ -2473,6 +2629,7 @@ struct ExerciseLibraryView: View {
     private func startQuickWorkout(for name: String) {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty else { return }
+        let type = store.exerciseType(for: trimmedName) ?? .weights
         draftTemplate = WorkoutTemplate(
             id: UUID(),
             title: "Explore",
@@ -2480,7 +2637,7 @@ struct ExerciseLibraryView: View {
                 TemplateExercise(
                     id: UUID(),
                     name: trimmedName,
-                    type: .weights,
+                    type: type,
                     weightKg: nil,
                     sets: nil,
                     repsPerSet: nil
@@ -2690,6 +2847,7 @@ struct AddTemplateView: View {
                                 draft: $draft,
                                 suggestions: store.exerciseNameCatalog(),
                                 showsMetrics: false,
+                                knownType: store.exerciseType(for: draft.name),
                                 onDelete: {
                                     drafts.removeAll { $0.id == draft.id }
                                     if drafts.isEmpty {
@@ -2809,6 +2967,7 @@ struct EditTemplateView: View {
                             draft: $draft,
                             suggestions: store.exerciseNameCatalog(),
                             showsMetrics: false,
+                            knownType: store.exerciseType(for: draft.name),
                             onDelete: {
                                 drafts.removeAll { $0.id == draft.id }
                                 if drafts.isEmpty {
