@@ -21,12 +21,12 @@
                             </imageView>
                         </subviews>
                         <viewLayoutGuide key="safeArea" id="x5M-j5-8wE"/>
-                        <color key="backgroundColor" name="Sand"/>
+                        <color key="backgroundColor" name="Night"/>
                         <constraints>
                             <constraint firstItem="7y2-6C-9sA" firstAttribute="centerX" secondItem="QYQ-hW-9W0" secondAttribute="centerX" id="1Fd-7r-3aD"/>
                             <constraint firstItem="7y2-6C-9sA" firstAttribute="centerY" secondItem="QYQ-hW-9W0" secondAttribute="centerY" id="2kB-6x-1vk"/>
-                            <constraint firstItem="7y2-6C-9sA" firstAttribute="height" constant="140" id="U7y-bV-9o6"/>
-                            <constraint firstItem="7y2-6C-9sA" firstAttribute="width" constant="140" id="nDU-5Z-Xxk"/>
+                            <constraint firstItem="7y2-6C-9sA" firstAttribute="height" constant="225" id="U7y-bV-9o6"/>
+                            <constraint firstItem="7y2-6C-9sA" firstAttribute="width" constant="225" id="nDU-5Z-Xxk"/>
                         </constraints>
                     </view>
                 </viewController>
@@ -37,8 +37,8 @@
     </scenes>
     <resources>
         <image name="logo" width="512" height="341.33334350585938"/>
-        <namedColor name="Sand">
-            <color red="0.90200001001358032" green="0.82700002193450928" blue="0.6940000057220459" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
+        <namedColor name="Night">
+            <color red="0.043000001460313797" green="0.043000001460313797" blue="0.059000000357627869" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
         </namedColor>
     </resources>
 </document>

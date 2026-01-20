@@ -890,12 +890,13 @@ struct HomeView: View {
                 .fontWeight(.semibold)
                 .foregroundStyle(Color("Sand"))
 
-            if store.exerciseNameCatalog().isEmpty {
+            let recentExercises = recentWorkoutExercises(limit: 8)
+            if recentExercises.isEmpty {
                 Text("No exercises yet. Add a workout to start your log.")
                     .font(.custom("Avenir Next", size: 14))
                     .foregroundStyle(Color("Sand").opacity(0.6))
             } else {
-                ForEach(store.exerciseNameCatalog().prefix(8), id: \.self) { name in
+                ForEach(recentExercises, id: \.self) { name in
                     Button {
                         startQuickWorkout(for: name)
                     } label: {
@@ -926,6 +927,25 @@ struct HomeView: View {
             ]
         )
         showingAdd = true
+    }
+
+    private func recentWorkoutExercises(limit: Int) -> [String] {
+        var seen = Set<String>()
+        var ordered: [String] = []
+
+        for session in store.sessions.sorted(by: { $0.date > $1.date }) {
+            for exercise in session.mergedExercises() {
+                let trimmed = exercise.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                let key = trimmed.lowercased()
+                guard !trimmed.isEmpty, !seen.contains(key) else { continue }
+                seen.insert(key)
+                ordered.append(trimmed)
+                if ordered.count >= limit {
+                    return ordered
+                }
+            }
+        }
+        return ordered
     }
 
     private func handleImport(from url: URL) {
