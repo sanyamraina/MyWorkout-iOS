@@ -46,6 +46,7 @@ enum MuscleGroup: String, CaseIterable, Codable {
     case triceps = "Triceps"
     case legs = "Legs"
     case core = "Core"
+    case cardio = "Cardio"
 }
 
 struct WorkoutExercise: Identifiable, Codable, Equatable {
@@ -385,7 +386,7 @@ final class WorkoutStore: ObservableObject {
 
     func addTemplate(from session: WorkoutSession) {
         let title = "Template \(templates.count + 1)"
-        let exercises = session.exercises.map { exercise in
+        let exercises = session.mergedExercises().map { exercise in
             TemplateExercise(
                 id: UUID(),
                 name: exercise.name,
@@ -451,7 +452,7 @@ final class WorkoutStore: ObservableObject {
 
         var latest: (date: Date, exercise: WorkoutExercise)?
         for session in sessions {
-            for exercise in session.exercises {
+            for exercise in session.mergedExercises() {
                 let exerciseKey = exercise.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
                 guard exerciseKey == key else { continue }
                 if let current = latest {
@@ -617,52 +618,90 @@ final class WorkoutStore: ObservableObject {
     }
 
     private static let defaultLibrary: [LibraryExercise] = [
-        LibraryExercise(id: UUID(), name: "Bench Press", group: .chest, type: .weights),
+        LibraryExercise(id: UUID(), name: "Bench Press (Barbell)", group: .chest, type: .weights),
+        LibraryExercise(id: UUID(), name: "Bench Press (Dumbbell)", group: .chest, type: .weights),
+        LibraryExercise(id: UUID(), name: "Bench Press (Smith)", group: .chest, type: .weights),
         LibraryExercise(id: UUID(), name: "Push Ups", group: .chest, type: .weights),
-        LibraryExercise(id: UUID(), name: "Incline Dumbbell Press", group: .chest, type: .weights),
-        LibraryExercise(id: UUID(), name: "Chest Fly", group: .chest, type: .weights),
+        LibraryExercise(id: UUID(), name: "Incline Press (Barbell)", group: .chest, type: .weights),
+        LibraryExercise(id: UUID(), name: "Incline Press (Dumbbell)", group: .chest, type: .weights),
+        LibraryExercise(id: UUID(), name: "Incline Press (Smith)", group: .chest, type: .weights),
+        LibraryExercise(id: UUID(), name: "Chest Fly (Cable)", group: .chest, type: .weights),
+        LibraryExercise(id: UUID(), name: "Chest Fly (Dumbbell)", group: .chest, type: .weights),
+        LibraryExercise(id: UUID(), name: "Chest Fly (Pec Deck)", group: .chest, type: .weights),
         LibraryExercise(id: UUID(), name: "Dips", group: .chest, type: .weights),
         LibraryExercise(id: UUID(), name: "Cable Crossover", group: .chest, type: .weights),
-        LibraryExercise(id: UUID(), name: "Lat Pulldown", group: .back, type: .weights),
-        LibraryExercise(id: UUID(), name: "Barbell Row", group: .back, type: .weights),
-        LibraryExercise(id: UUID(), name: "Deadlift", group: .back, type: .weights),
-        LibraryExercise(id: UUID(), name: "Pull Ups", group: .back, type: .weights),
-        LibraryExercise(id: UUID(), name: "Seated Cable Row", group: .back, type: .weights),
-        LibraryExercise(id: UUID(), name: "Single Arm Dumbbell Row", group: .back, type: .weights),
+        LibraryExercise(id: UUID(), name: "Lat Pulldown (Wide Grip)", group: .back, type: .weights),
+        LibraryExercise(id: UUID(), name: "Lat Pulldown (Close Grip)", group: .back, type: .weights),
+        LibraryExercise(id: UUID(), name: "Lat Pulldown (Neutral Grip)", group: .back, type: .weights),
+        LibraryExercise(id: UUID(), name: "Row (Barbell)", group: .back, type: .weights),
+        LibraryExercise(id: UUID(), name: "Row (Dumbbell)", group: .back, type: .weights),
+        LibraryExercise(id: UUID(), name: "Row (Seated Cable)", group: .back, type: .weights),
+        LibraryExercise(id: UUID(), name: "Row (Chest-Supported)", group: .back, type: .weights),
+        LibraryExercise(id: UUID(), name: "Deadlift (Conventional)", group: .back, type: .weights),
+        LibraryExercise(id: UUID(), name: "Deadlift (Romanian)", group: .back, type: .weights),
+        LibraryExercise(id: UUID(), name: "Deadlift (Sumo)", group: .back, type: .weights),
+        LibraryExercise(id: UUID(), name: "Pull Ups (Wide Grip)", group: .back, type: .weights),
+        LibraryExercise(id: UUID(), name: "Pull Ups (Neutral Grip)", group: .back, type: .weights),
+        LibraryExercise(id: UUID(), name: "Chin Ups", group: .back, type: .weights),
         LibraryExercise(id: UUID(), name: "Straight Arm Pulldown", group: .back, type: .weights),
-        LibraryExercise(id: UUID(), name: "Overhead Press", group: .shoulders, type: .weights),
-        LibraryExercise(id: UUID(), name: "Lateral Raises", group: .shoulders, type: .weights),
+        LibraryExercise(id: UUID(), name: "Overhead Press (Barbell)", group: .shoulders, type: .weights),
+        LibraryExercise(id: UUID(), name: "Overhead Press (Dumbbell)", group: .shoulders, type: .weights),
+        LibraryExercise(id: UUID(), name: "Overhead Press (Smith)", group: .shoulders, type: .weights),
+        LibraryExercise(id: UUID(), name: "Lateral Raise (Dumbbell)", group: .shoulders, type: .weights),
+        LibraryExercise(id: UUID(), name: "Lateral Raise (Cable)", group: .shoulders, type: .weights),
+        LibraryExercise(id: UUID(), name: "Lateral Raise (Machine)", group: .shoulders, type: .weights),
         LibraryExercise(id: UUID(), name: "Face Pulls", group: .shoulders, type: .weights),
         LibraryExercise(id: UUID(), name: "Front Raises", group: .shoulders, type: .weights),
-        LibraryExercise(id: UUID(), name: "Rear Delt Fly", group: .shoulders, type: .weights),
+        LibraryExercise(id: UUID(), name: "Rear Delt Fly (Dumbbell)", group: .shoulders, type: .weights),
+        LibraryExercise(id: UUID(), name: "Rear Delt Fly (Cable)", group: .shoulders, type: .weights),
+        LibraryExercise(id: UUID(), name: "Rear Delt Fly (Reverse Pec Deck)", group: .shoulders, type: .weights),
         LibraryExercise(id: UUID(), name: "Arnold Press", group: .shoulders, type: .weights),
-        LibraryExercise(id: UUID(), name: "Bicep Curls", group: .biceps, type: .weights),
-        LibraryExercise(id: UUID(), name: "Hammer Curls", group: .biceps, type: .weights),
-        LibraryExercise(id: UUID(), name: "Chin Ups", group: .biceps, type: .weights),
-        LibraryExercise(id: UUID(), name: "Preacher Curls", group: .biceps, type: .weights),
+        LibraryExercise(id: UUID(), name: "Curl (Barbell)", group: .biceps, type: .weights),
+        LibraryExercise(id: UUID(), name: "Curl (Dumbbell)", group: .biceps, type: .weights),
+        LibraryExercise(id: UUID(), name: "Curl (Preacher)", group: .biceps, type: .weights),
+        LibraryExercise(id: UUID(), name: "Curl (Cable)", group: .biceps, type: .weights),
+        LibraryExercise(id: UUID(), name: "Hammer Curl (Dumbbell)", group: .biceps, type: .weights),
+        LibraryExercise(id: UUID(), name: "Hammer Curl (Cable)", group: .biceps, type: .weights),
         LibraryExercise(id: UUID(), name: "Concentration Curls", group: .biceps, type: .weights),
-        LibraryExercise(id: UUID(), name: "Tricep Pushdown", group: .triceps, type: .weights),
+        LibraryExercise(id: UUID(), name: "Pushdown (Rope)", group: .triceps, type: .weights),
+        LibraryExercise(id: UUID(), name: "Pushdown (Bar)", group: .triceps, type: .weights),
+        LibraryExercise(id: UUID(), name: "Pushdown (Straight)", group: .triceps, type: .weights),
         LibraryExercise(id: UUID(), name: "Skull Crushers", group: .triceps, type: .weights),
-        LibraryExercise(id: UUID(), name: "Tricep Dips", group: .triceps, type: .weights),
-        LibraryExercise(id: UUID(), name: "Overhead Tricep Extension", group: .triceps, type: .weights),
+        LibraryExercise(id: UUID(), name: "Overhead Extension (Dumbbell)", group: .triceps, type: .weights),
+        LibraryExercise(id: UUID(), name: "Overhead Extension (Cable)", group: .triceps, type: .weights),
+        LibraryExercise(id: UUID(), name: "Dips (Bench)", group: .triceps, type: .weights),
+        LibraryExercise(id: UUID(), name: "Dips (Parallel Bars)", group: .triceps, type: .weights),
         LibraryExercise(id: UUID(), name: "Close Grip Bench Press", group: .triceps, type: .weights),
-        LibraryExercise(id: UUID(), name: "Squat", group: .legs, type: .weights),
+        LibraryExercise(id: UUID(), name: "Squat (Back)", group: .legs, type: .weights),
+        LibraryExercise(id: UUID(), name: "Squat (Front)", group: .legs, type: .weights),
+        LibraryExercise(id: UUID(), name: "Squat (Smith)", group: .legs, type: .weights),
         LibraryExercise(id: UUID(), name: "Leg Press", group: .legs, type: .weights),
-        LibraryExercise(id: UUID(), name: "Romanian Deadlift", group: .legs, type: .weights),
-        LibraryExercise(id: UUID(), name: "Lunges", group: .legs, type: .weights),
+        LibraryExercise(id: UUID(), name: "Deadlift (Romanian)", group: .legs, type: .weights),
+        LibraryExercise(id: UUID(), name: "Deadlift (Sumo)", group: .legs, type: .weights),
+        LibraryExercise(id: UUID(), name: "Lunge (Walking)", group: .legs, type: .weights),
+        LibraryExercise(id: UUID(), name: "Lunge (Reverse)", group: .legs, type: .weights),
+        LibraryExercise(id: UUID(), name: "Bulgarian Split Squat", group: .legs, type: .weights),
         LibraryExercise(id: UUID(), name: "Leg Extensions", group: .legs, type: .weights),
         LibraryExercise(id: UUID(), name: "Leg Curls", group: .legs, type: .weights),
         LibraryExercise(id: UUID(), name: "Calf Raises", group: .legs, type: .weights),
-        LibraryExercise(id: UUID(), name: "Plank", group: .core, type: .weights),
+        LibraryExercise(id: UUID(), name: "Plank (Standard)", group: .core, type: .weights),
+        LibraryExercise(id: UUID(), name: "Plank (Side)", group: .core, type: .weights),
+        LibraryExercise(id: UUID(), name: "Plank (Weighted)", group: .core, type: .weights),
+        LibraryExercise(id: UUID(), name: "Crunch (Cable)", group: .core, type: .weights),
+        LibraryExercise(id: UUID(), name: "Crunch (Machine)", group: .core, type: .weights),
         LibraryExercise(id: UUID(), name: "Hanging Leg Raises", group: .core, type: .weights),
-        LibraryExercise(id: UUID(), name: "Cable Crunches", group: .core, type: .weights),
         LibraryExercise(id: UUID(), name: "Russian Twists", group: .core, type: .weights),
         LibraryExercise(id: UUID(), name: "Bicycle Crunches", group: .core, type: .weights),
         LibraryExercise(id: UUID(), name: "Dead Bug", group: .core, type: .weights),
-        LibraryExercise(id: UUID(), name: "Treadmill", group: .legs, type: .cardio),
-        LibraryExercise(id: UUID(), name: "Cycling", group: .legs, type: .cardio),
-        LibraryExercise(id: UUID(), name: "Rowing", group: .back, type: .cardio),
-        LibraryExercise(id: UUID(), name: "Jump Rope", group: .legs, type: .cardio)
+        LibraryExercise(id: UUID(), name: "Treadmill", group: .cardio, type: .cardio),
+        LibraryExercise(id: UUID(), name: "Cycling", group: .cardio, type: .cardio),
+        LibraryExercise(id: UUID(), name: "Rowing", group: .cardio, type: .cardio),
+        LibraryExercise(id: UUID(), name: "Jump Rope", group: .cardio, type: .cardio),
+        LibraryExercise(id: UUID(), name: "Stair Climber", group: .cardio, type: .cardio),
+        LibraryExercise(id: UUID(), name: "Elliptical", group: .cardio, type: .cardio),
+        LibraryExercise(id: UUID(), name: "Running (Outdoor)", group: .cardio, type: .cardio),
+        LibraryExercise(id: UUID(), name: "Walking", group: .cardio, type: .cardio),
+        LibraryExercise(id: UUID(), name: "Swimming", group: .cardio, type: .cardio)
     ]
 
     private func loadSessions() -> [WorkoutSession] {
@@ -928,7 +967,7 @@ struct HomeView: View {
                     .foregroundStyle(Color("Sand"))
                 Spacer()
                 Menu {
-                    Button("Export Backup") {
+                    Button {
                         do {
                             exportDocument = BackupDocument(data: try store.exportBackupData())
                             isExporting = true
@@ -936,9 +975,13 @@ struct HomeView: View {
                             importErrorMessage = error.localizedDescription
                             showImportError = true
                         }
+                    } label: {
+                        Label("Export Backup", systemImage: "square.and.arrow.up")
                     }
-                    Button("Import Backup") {
+                    Button {
                         isImporting = true
+                    } label: {
+                        Label("Import Backup", systemImage: "square.and.arrow.down")
                     }
                     Button(role: .destructive) {
                         showResetConfirm = true
@@ -959,7 +1002,7 @@ struct HomeView: View {
 
     private var stats: some View {
         let totalSets = store.sessions.reduce(0) { total, session in
-            total + session.exercises.filter { $0.type == .weights }.reduce(0) { $0 + $1.sets.count }
+            total + session.mergedExercises().filter { $0.type == .weights }.reduce(0) { $0 + $1.sets.count }
         }
         return HStack(spacing: 16) {
             StatCard(title: "Workouts", value: "\(store.sessions.count)")
@@ -1293,12 +1336,12 @@ struct ProgressTabView: View {
         }
         .onAppear {
             if selectedExercise.isEmpty {
-                selectedExercise = store.exerciseNameCatalog().first ?? ""
+                selectedExercise = recentExerciseNames.first ?? ""
             }
         }
         .onChange(of: store.sessions.count) { _, _ in
             if selectedExercise.isEmpty {
-                selectedExercise = store.exerciseNameCatalog().first ?? ""
+                selectedExercise = recentExerciseNames.first ?? ""
             }
         }
     }
@@ -1320,9 +1363,9 @@ struct ProgressTabView: View {
                     .fontWeight(.semibold)
                     .foregroundStyle(Color("Sand"))
                 Spacer()
-                if !store.exerciseNameCatalog().isEmpty {
+                if !recentExerciseNames.isEmpty {
                     Picker("Exercise", selection: $selectedExercise) {
-                        ForEach(store.exerciseNameCatalog(), id: \.self) { name in
+                        ForEach(recentExerciseNames, id: \.self) { name in
                             Text(name).tag(name)
                         }
                     }
@@ -1552,12 +1595,27 @@ struct ProgressTabView: View {
         }
     }
 
+    private var recentExerciseNames: [String] {
+        var seen = Set<String>()
+        var ordered: [String] = []
+        for session in store.sessions.sorted(by: { $0.date > $1.date }) {
+            for exercise in session.mergedExercises() where exercise.type == .weights {
+                let trimmed = exercise.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                let key = trimmed.lowercased()
+                guard !trimmed.isEmpty, !seen.contains(key) else { continue }
+                seen.insert(key)
+                ordered.append(trimmed)
+            }
+        }
+        return ordered
+    }
+
     private var strengthPoints: [StrengthPoint] {
         let name = selectedExercise.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { return [] }
         var points: [StrengthPoint] = []
         for session in filteredSessions {
-            guard let exercise = session.exercises.first(where: {
+            guard let exercise = session.mergedExercises().first(where: {
                 $0.type == .weights && $0.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == name.lowercased()
             }) else { continue }
             let bestSet = exercise.sets.max { $0.weightKg < $1.weightKg }
@@ -1569,7 +1627,7 @@ struct ProgressTabView: View {
 
     private var volumePoints: [VolumePoint] {
         filteredSessions.map { session in
-            let volume = session.exercises.filter { $0.type == .weights }.reduce(0.0) { total, exercise in
+            let volume = session.mergedExercises().filter { $0.type == .weights }.reduce(0.0) { total, exercise in
                 total + exercise.sets.reduce(0.0) { $0 + ($1.weightKg * Double($1.reps)) }
             }
             return VolumePoint(date: session.date, volume: volume)
@@ -1587,13 +1645,15 @@ struct ProgressTabView: View {
     }
 
     private var weeklyCardio: [WeekPoint] {
-        let cardioSessions = filteredSessions
+        let cardioSessions = filteredSessions.filter { session in
+            session.mergedExercises().contains { $0.type == .cardio }
+        }
         let grouped = Dictionary(grouping: cardioSessions) { session in
             Calendar.current.date(from: Calendar.current.dateComponents([.yearForWeekOfYear, .weekOfYear], from: session.date)) ?? session.date
         }
         return grouped.map { weekStart, sessions in
             let totals = sessions.reduce(into: (minutes: 0, calories: 0)) { result, session in
-                for exercise in session.exercises where exercise.type == .cardio {
+                for exercise in session.mergedExercises() where exercise.type == .cardio {
                     result.minutes += exercise.durationMinutes ?? 0
                     result.calories += exercise.calories ?? 0
                 }
@@ -1608,7 +1668,7 @@ struct ProgressTabView: View {
         var items: [PRItem] = []
         let sessions = filteredSessions.sorted { $0.date < $1.date }
         for session in sessions {
-            for exercise in session.exercises where exercise.type == .weights {
+            for exercise in session.mergedExercises() where exercise.type == .weights {
                 let name = exercise.name
                 let bestSet = exercise.sets.max { $0.weightKg < $1.weightKg }
                 guard let bestSet else { continue }
@@ -1625,7 +1685,7 @@ struct ProgressTabView: View {
     private var focusItems: [FocusItem] {
         var counts: [String: Int] = [:]
         for session in filteredSessions {
-            for exercise in session.exercises where exercise.type == .weights {
+            for exercise in session.mergedExercises() where exercise.type == .weights {
                 counts[exercise.name, default: 0] += exercise.sets.count
             }
         }
@@ -3046,3 +3106,4 @@ struct SearchField: View {
     ContentView()
         .preferredColorScheme(.dark)
 }
+ 
