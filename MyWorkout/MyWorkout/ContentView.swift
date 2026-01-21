@@ -49,6 +49,44 @@ enum MuscleGroup: String, CaseIterable, Codable {
     case cardio = "Cardio"
 }
 
+enum SessionMergeWindowOption: String, CaseIterable, Codable {
+    case threeHours
+    case sixHours
+    case twelveHours
+    case twentyFourHours
+    case sameDay
+
+    var label: String {
+        switch self {
+        case .threeHours:
+            return "3 hours (recommended)"
+        case .sixHours:
+            return "6 hours"
+        case .twelveHours:
+            return "12 hours"
+        case .twentyFourHours:
+            return "24 hours"
+        case .sameDay:
+            return "Same day"
+        }
+    }
+
+    var windowSeconds: TimeInterval? {
+        switch self {
+        case .threeHours:
+            return 3 * 60 * 60
+        case .sixHours:
+            return 6 * 60 * 60
+        case .twelveHours:
+            return 12 * 60 * 60
+        case .twentyFourHours:
+            return 24 * 60 * 60
+        case .sameDay:
+            return nil
+        }
+    }
+}
+
 struct WorkoutExercise: Identifiable, Codable, Equatable {
     let id: UUID
     let name: String
@@ -177,7 +215,38 @@ struct TemplateExercise: Identifiable, Codable, Equatable {
 struct WorkoutSession: Identifiable, Codable, Equatable {
     let id: UUID
     let date: Date
+    let endDate: Date
     let exercises: [WorkoutExercise]
+
+    init(id: UUID, date: Date, endDate: Date? = nil, exercises: [WorkoutExercise]) {
+        self.id = id
+        self.date = date
+        self.endDate = endDate ?? date
+        self.exercises = exercises
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        date = try container.decode(Date.self, forKey: .date)
+        endDate = try container.decodeIfPresent(Date.self, forKey: .endDate) ?? date
+        exercises = try container.decode([WorkoutExercise].self, forKey: .exercises)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(date, forKey: .date)
+        try container.encode(endDate, forKey: .endDate)
+        try container.encode(exercises, forKey: .exercises)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case date
+        case endDate
+        case exercises
+    }
 }
 
 extension WorkoutSession {
@@ -269,18 +338,29 @@ final class WorkoutStore: ObservableObject {
     @Published private(set) var exerciseLibrary: [LibraryExercise] = WorkoutStore.defaultLibrary
     private var hasLoaded = false
     @Published private var exerciseTypeMap: [String: ExerciseType] = [:]
+    @Published var defaultWeightUnit: WeightUnit = .kg {
+        didSet { saveDefaultWeightUnit() }
+    }
+    @Published var sessionMergeWindowOption: SessionMergeWindowOption = .threeHours {
+        didSet { saveSessionMergeWindowOption() }
+    }
 
     init() {
+        defaultWeightUnit = loadDefaultWeightUnit()
+        sessionMergeWindowOption = loadSessionMergeWindowOption()
         load()
     }
 
     func addSession(date: Date, exercises: [WorkoutExercise]) {
-        if let index = sessions.firstIndex(where: { Calendar.current.isDate($0.date, inSameDayAs: date) }) {
+        if let index = closestSessionIndex(to: date) {
             let existing = sessions[index]
             let mergedExercises = mergeExercises(existing: existing.exercises, incoming: exercises)
+            let startDate = min(existing.date, date)
+            let endDate = max(existing.endDate, date)
             let merged = WorkoutSession(
                 id: existing.id,
-                date: existing.date,
+                date: startDate,
+                endDate: endDate,
                 exercises: mergedExercises
             )
             sessions[index] = merged
@@ -289,6 +369,7 @@ final class WorkoutStore: ObservableObject {
             let session = WorkoutSession(
                 id: UUID(),
                 date: date,
+                endDate: date,
                 exercises: exercises
             )
             sessions.insert(session, at: 0)
@@ -352,10 +433,40 @@ final class WorkoutStore: ObservableObject {
         return "\(normalized)|\(exercise.type.rawValue)"
     }
 
+    private func closestSessionIndex(to date: Date) -> Int? {
+        var closest: (index: Int, distance: TimeInterval)?
+        let usesSameDay = sessionMergeWindowOption == .sameDay
+        let maxWindow = sessionMergeWindowOption.windowSeconds
+        for (index, session) in sessions.enumerated() {
+            if usesSameDay, !Calendar.current.isDate(session.date, inSameDayAs: date) {
+                continue
+            }
+            let distance: TimeInterval
+            if date < session.date {
+                distance = session.date.timeIntervalSince(date)
+            } else if date > session.endDate {
+                distance = date.timeIntervalSince(session.endDate)
+            } else {
+                distance = 0
+            }
+            if let maxWindow, distance > maxWindow {
+                continue
+            }
+            if let current = closest {
+                if distance < current.distance {
+                    closest = (index, distance)
+                }
+            } else {
+                closest = (index, distance)
+            }
+        }
+        return closest?.index
+    }
+
     func updateSession(id: UUID, date: Date, exercises: [WorkoutExercise]) {
         guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
         let mergedExercises = mergeExercises(existing: [], incoming: exercises)
-        sessions[index] = WorkoutSession(id: id, date: date, exercises: mergedExercises)
+        sessions[index] = WorkoutSession(id: id, date: date, endDate: date, exercises: mergedExercises)
         sessions.sort { $0.date > $1.date }
         updateExerciseTypes(from: mergedExercises)
         saveSessions()
@@ -419,6 +530,8 @@ final class WorkoutStore: ObservableObject {
                     return ExerciseDraft(
                         name: trimmedName,
                         type: .cardio,
+                        sets: [],
+                        weightUnit: defaultWeightUnit,
                         durationMinutes: duration,
                         calories: calories
                     )
@@ -426,14 +539,17 @@ final class WorkoutStore: ObservableObject {
                     if latest.exercise.type == .weights {
                         let setDrafts = latest.exercise.sets.map {
                             WorkoutSetDraft(
-                                weight: $0.weightKg == 0 ? "" : String(format: "%.1f", $0.weightKg),
+                                weight: $0.weightKg == 0 ? "" : String(format: "%.1f", weightValue($0.weightKg, unit: defaultWeightUnit)),
                                 reps: "\($0.reps)"
                             )
                         }
+                        let isBodyweight = latest.exercise.sets.allSatisfy { $0.weightKg == 0 }
                         return ExerciseDraft(
                             name: latest.exercise.name,
                             type: .weights,
-                            sets: setDrafts.isEmpty ? [WorkoutSetDraft()] : setDrafts
+                            sets: setDrafts.isEmpty ? [WorkoutSetDraft()] : setDrafts,
+                            isBodyweight: isBodyweight,
+                            weightUnit: defaultWeightUnit
                         )
                     }
                 }
@@ -441,7 +557,9 @@ final class WorkoutStore: ObservableObject {
             return ExerciseDraft(
                 name: trimmedName,
                 type: exercise.type,
-                sets: exercise.type == .weights ? [WorkoutSetDraft()] : []
+                sets: exercise.type == .weights ? [WorkoutSetDraft()] : [],
+                isBodyweight: false,
+                weightUnit: defaultWeightUnit
             )
         }
     }
@@ -492,6 +610,9 @@ final class WorkoutStore: ObservableObject {
     func importBackup(_ backup: WorkoutBackup) {
         sessions = backup.sessions.sorted { $0.date > $1.date }
         templates = backup.templates
+        exerciseTypeMap = [:]
+        updateExerciseTypes(from: sessions.flatMap { $0.exercises })
+        updateExerciseTypes(from: templates.flatMap { $0.exercises })
         saveSessions()
         saveTemplates()
     }
@@ -523,6 +644,13 @@ final class WorkoutStore: ObservableObject {
     private func formattedOptionalInt(_ value: Int?) -> String {
         guard let value else { return "" }
         return "\(value)"
+    }
+
+    private func weightValue(_ kg: Double, unit: WeightUnit) -> Double {
+        if unit == .lb {
+            return kg * 2.20462262
+        }
+        return kg
     }
 
     private func load() {
@@ -617,6 +745,24 @@ final class WorkoutStore: ObservableObject {
         }
     }
 
+    private func loadDefaultWeightUnit() -> WeightUnit {
+        let raw = UserDefaults.standard.string(forKey: "defaultWeightUnit") ?? WeightUnit.kg.rawValue
+        return WeightUnit(rawValue: raw) ?? .kg
+    }
+
+    private func saveDefaultWeightUnit() {
+        UserDefaults.standard.set(defaultWeightUnit.rawValue, forKey: "defaultWeightUnit")
+    }
+
+    private func loadSessionMergeWindowOption() -> SessionMergeWindowOption {
+        let raw = UserDefaults.standard.string(forKey: "sessionMergeWindowOption")
+        return SessionMergeWindowOption(rawValue: raw ?? "") ?? .threeHours
+    }
+
+    private func saveSessionMergeWindowOption() {
+        UserDefaults.standard.set(sessionMergeWindowOption.rawValue, forKey: "sessionMergeWindowOption")
+    }
+
     private static let defaultLibrary: [LibraryExercise] = [
         LibraryExercise(id: UUID(), name: "Bench Press (Barbell)", group: .chest, type: .weights),
         LibraryExercise(id: UUID(), name: "Bench Press (Dumbbell)", group: .chest, type: .weights),
@@ -647,6 +793,8 @@ final class WorkoutStore: ObservableObject {
         LibraryExercise(id: UUID(), name: "Overhead Press (Barbell)", group: .shoulders, type: .weights),
         LibraryExercise(id: UUID(), name: "Overhead Press (Dumbbell)", group: .shoulders, type: .weights),
         LibraryExercise(id: UUID(), name: "Overhead Press (Smith)", group: .shoulders, type: .weights),
+        LibraryExercise(id: UUID(), name: "Shoulder Press", group: .shoulders, type: .weights),
+        LibraryExercise(id: UUID(), name: "Shoulder Press (Machine)", group: .shoulders, type: .weights),
         LibraryExercise(id: UUID(), name: "Lateral Raise (Dumbbell)", group: .shoulders, type: .weights),
         LibraryExercise(id: UUID(), name: "Lateral Raise (Cable)", group: .shoulders, type: .weights),
         LibraryExercise(id: UUID(), name: "Lateral Raise (Machine)", group: .shoulders, type: .weights),
@@ -855,6 +1003,11 @@ struct ContentView: View {
                 .tabItem {
                     Label("Progress", systemImage: "chart.line.uptrend.xyaxis")
                 }
+
+            SettingsView(store: store)
+                .tabItem {
+                    Label("Settings", systemImage: "gearshape.fill")
+                }
         }
     }
 }
@@ -866,12 +1019,6 @@ struct HomeView: View {
     @State private var editingTemplate: WorkoutTemplate?
     @State private var editingSession: WorkoutSession?
     @State private var draftFromTemplate: WorkoutTemplate?
-    @State private var isExporting = false
-    @State private var isImporting = false
-    @State private var exportDocument: BackupDocument?
-    @State private var importErrorMessage: String?
-    @State private var showImportError = false
-    @State private var showResetConfirm = false
 
     var body: some View {
         ZStack {
@@ -923,34 +1070,6 @@ struct HomeView: View {
         .sheet(item: $editingTemplate) { template in
             EditTemplateView(store: store, template: template)
         }
-        .fileExporter(
-            isPresented: $isExporting,
-            document: exportDocument,
-            contentType: .json,
-            defaultFilename: "myworkout-backup"
-        ) { _ in }
-        .fileImporter(isPresented: $isImporting, allowedContentTypes: [.json]) { result in
-            switch result {
-            case .success(let url):
-                handleImport(from: url)
-            case .failure(let error):
-                importErrorMessage = error.localizedDescription
-                showImportError = true
-            }
-        }
-        .alert("Import Failed", isPresented: $showImportError) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(importErrorMessage ?? "Unable to import backup.")
-        }
-        .alert("Reset All Data?", isPresented: $showResetConfirm) {
-            Button("Cancel", role: .cancel) {}
-            Button("Reset", role: .destructive) {
-                store.resetAllData()
-            }
-        } message: {
-            Text("This will permanently delete all workouts, templates, and exercise types on this device.")
-        }
     }
 
     private var header: some View {
@@ -966,33 +1085,6 @@ struct HomeView: View {
                     .fontWeight(.semibold)
                     .foregroundStyle(Color("Sand"))
                 Spacer()
-                Menu {
-                    Button {
-                        do {
-                            exportDocument = BackupDocument(data: try store.exportBackupData())
-                            isExporting = true
-                        } catch {
-                            importErrorMessage = error.localizedDescription
-                            showImportError = true
-                        }
-                    } label: {
-                        Label("Export Backup", systemImage: "square.and.arrow.up")
-                    }
-                    Button {
-                        isImporting = true
-                    } label: {
-                        Label("Import Backup", systemImage: "square.and.arrow.down")
-                    }
-                    Button(role: .destructive) {
-                        showResetConfirm = true
-                    } label: {
-                        Label("Reset All Data", systemImage: "trash")
-                    }
-                } label: {
-                    Image(systemName: "ellipsis.circle")
-                        .font(.custom("Avenir Next", size: 22))
-                        .foregroundStyle(Color("Sand"))
-                }
             }
             Text("Track what you lift, keep it simple.")
                 .font(.custom("Avenir Next", size: 16))
@@ -1121,23 +1213,6 @@ struct HomeView: View {
         return ordered
     }
 
-    private func handleImport(from url: URL) {
-        let shouldStop = url.startAccessingSecurityScopedResource()
-        defer {
-            if shouldStop {
-                url.stopAccessingSecurityScopedResource()
-            }
-        }
-
-        do {
-            let data = try Data(contentsOf: url)
-            try store.importBackupData(data)
-        } catch {
-            importErrorMessage = error.localizedDescription
-            showImportError = true
-        }
-    }
-
     private var addButton: some View {
         Button {
             showingAdd = true
@@ -1188,6 +1263,7 @@ struct HistoryView: View {
                             } label: {
                                 WorkoutSessionCard(
                                     session: session,
+                                    sessionNumber: sessionNumbers[session.id] ?? 1,
                                     onDelete: { store.removeSession(session) },
                                     onSaveTemplate: { store.addTemplate(from: session) }
                                 )
@@ -1239,6 +1315,229 @@ struct HistoryView: View {
         }
         .sheet(item: $editingSession) { session in
             AddWorkoutView(store: store, template: nil, session: session)
+        }
+    }
+
+    private var sessionNumbers: [UUID: Int] {
+        let grouped = Dictionary(grouping: store.sessions) { session in
+            Calendar.current.startOfDay(for: session.date)
+        }
+        var mapping: [UUID: Int] = [:]
+        for (_, sessions) in grouped {
+            let ordered = sessions.sorted { $0.date < $1.date }
+            for (idx, session) in ordered.enumerated() {
+                mapping[session.id] = idx + 1
+            }
+        }
+        return mapping
+    }
+}
+
+struct SettingsView: View {
+    @ObservedObject var store: WorkoutStore
+    @State private var isExporting = false
+    @State private var isImporting = false
+    @State private var exportDocument: BackupDocument?
+    @State private var importErrorMessage: String?
+    @State private var showImportError = false
+    @State private var showResetConfirm = false
+
+    var body: some View {
+        ZStack {
+            LinearGradient(
+                colors: [Color("Night"), Color("Coal")],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("Settings")
+                        .font(.custom("Avenir Next", size: 30))
+                        .fontWeight(.semibold)
+                        .foregroundStyle(Color("Sand"))
+
+                    preferencesCard
+                    dataCard
+                    aboutCard
+                }
+                .padding(.horizontal, 22)
+                .padding(.vertical, 24)
+            }
+        }
+        .fileExporter(
+            isPresented: $isExporting,
+            document: exportDocument,
+            contentType: .json,
+            defaultFilename: "myworkout-backup"
+        ) { _ in }
+        .fileImporter(isPresented: $isImporting, allowedContentTypes: [.json]) { result in
+            switch result {
+            case .success(let url):
+                handleImport(from: url)
+            case .failure(let error):
+                importErrorMessage = error.localizedDescription
+                showImportError = true
+            }
+        }
+        .alert("Import Failed", isPresented: $showImportError) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(importErrorMessage ?? "Unable to import backup.")
+        }
+        .alert("Reset All Data?", isPresented: $showResetConfirm) {
+            Button("Cancel", role: .cancel) {}
+            Button("Reset", role: .destructive) {
+                store.resetAllData()
+            }
+        } message: {
+            Text("This will permanently delete all workouts, templates, and exercise types on this device.")
+        }
+    }
+
+    private var preferencesCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Preferences")
+                .font(.custom("Avenir Next", size: 14))
+                .foregroundStyle(Color("Sand").opacity(0.7))
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Session Window")
+                    .font(.custom("Avenir Next", size: 15))
+                    .foregroundStyle(Color("Sand"))
+                Text("Workouts logged within this window merge into the same session.")
+                    .font(.custom("Avenir Next", size: 12))
+                    .foregroundStyle(Color("Sand").opacity(0.6))
+                Picker("Session Window", selection: $store.sessionMergeWindowOption) {
+                    ForEach(SessionMergeWindowOption.allCases, id: \.self) { option in
+                        Text(option.label).tag(option)
+                    }
+                }
+                .pickerStyle(.menu)
+                .tint(Color("Sand"))
+            }
+
+            Divider()
+                .overlay(Color("Sand").opacity(0.12))
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Default Weight Unit")
+                    .font(.custom("Avenir Next", size: 15))
+                    .foregroundStyle(Color("Sand"))
+                Picker("Default Weight Unit", selection: $store.defaultWeightUnit) {
+                    ForEach(WeightUnit.allCases, id: \.self) { unit in
+                        Text(unit.label).tag(unit)
+                    }
+                }
+                .pickerStyle(.segmented)
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 18)
+                .fill(Color("Card").opacity(0.9))
+        )
+    }
+
+    private var dataCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Data")
+                .font(.custom("Avenir Next", size: 14))
+                .foregroundStyle(Color("Sand").opacity(0.7))
+
+            Button {
+                do {
+                    exportDocument = BackupDocument(data: try store.exportBackupData())
+                    isExporting = true
+                } catch {
+                    importErrorMessage = error.localizedDescription
+                    showImportError = true
+                }
+            } label: {
+                settingsRow(title: "Export Backup", systemImage: "square.and.arrow.up")
+            }
+
+            Button {
+                isImporting = true
+            } label: {
+                settingsRow(title: "Import Backup", systemImage: "square.and.arrow.down")
+            }
+
+            Divider()
+                .overlay(Color("Sand").opacity(0.12))
+
+            Button(role: .destructive) {
+                showResetConfirm = true
+            } label: {
+                settingsRow(title: "Reset All Data", systemImage: "trash", isDestructive: true)
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 18)
+                .fill(Color("Card").opacity(0.9))
+        )
+    }
+
+    private var aboutCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("About")
+                .font(.custom("Avenir Next", size: 14))
+                .foregroundStyle(Color("Sand").opacity(0.7))
+            Text("MyWorkout")
+                .font(.custom("Avenir Next", size: 18))
+                .foregroundStyle(Color("Sand"))
+            Text("Track what you lift, keep it simple.")
+                .font(.custom("Avenir Next", size: 13))
+                .foregroundStyle(Color("Sand").opacity(0.7))
+            Text("Version \(appVersion)")
+                .font(.custom("Avenir Next", size: 12))
+                .foregroundStyle(Color("Sand").opacity(0.6))
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 18)
+                .fill(Color("Card").opacity(0.9))
+        )
+    }
+
+    private var appVersion: String {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0"
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "1"
+        return "\(version) (\(build))"
+    }
+
+    private func settingsRow(title: String, systemImage: String, isDestructive: Bool = false) -> some View {
+        HStack {
+            Image(systemName: systemImage)
+                .font(.custom("Avenir Next", size: 16))
+                .foregroundStyle(isDestructive ? Color.red.opacity(0.8) : Color("Sand"))
+            Text(title)
+                .font(.custom("Avenir Next", size: 16))
+                .foregroundStyle(isDestructive ? Color.red.opacity(0.8) : Color("Sand"))
+            Spacer()
+        }
+        .padding(.vertical, 10)
+    }
+
+    private func handleImport(from url: URL) {
+        let shouldStop = url.startAccessingSecurityScopedResource()
+        defer {
+            if shouldStop {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        do {
+            let data = try Data(contentsOf: url)
+            try store.importBackupData(data)
+        } catch {
+            importErrorMessage = error.localizedDescription
+            showImportError = true
         }
     }
 }
@@ -1738,9 +2037,14 @@ struct ExerciseHistoryCard: View {
             let setCount = exercise.sets.count
             let maxWeight = exercise.sets.map(\.weightKg).max() ?? 0
             let maxReps = exercise.sets.map(\.reps).max() ?? 0
+            let isBodyweight = !exercise.sets.isEmpty && exercise.sets.allSatisfy { $0.weightKg == 0 }
             var tags = ["\(setCount) sets"]
             if setCount > 0 {
-                tags.append(String(format: "Max %.1f kg", maxWeight))
+                if isBodyweight {
+                    tags.append("Bodyweight")
+                } else {
+                    tags.append(String(format: "Max %.1f kg", maxWeight))
+                }
                 tags.append("Max \(maxReps) reps")
             }
             return tags
@@ -1762,6 +2066,7 @@ struct ExerciseDraft: Identifiable, Equatable {
     var name: String
     var type: ExerciseType
     var sets: [WorkoutSetDraft]
+    var isBodyweight: Bool
     var weightUnit: WeightUnit
     var durationMinutes: String
     var calories: String
@@ -1771,6 +2076,7 @@ struct ExerciseDraft: Identifiable, Equatable {
         name: String = "",
         type: ExerciseType = .weights,
         sets: [WorkoutSetDraft] = [WorkoutSetDraft()],
+        isBodyweight: Bool = false,
         weightUnit: WeightUnit = .kg,
         durationMinutes: String = "",
         calories: String = ""
@@ -1779,6 +2085,7 @@ struct ExerciseDraft: Identifiable, Equatable {
         self.name = name
         self.type = type
         self.sets = sets
+        self.isBodyweight = isBodyweight
         self.weightUnit = weightUnit
         self.durationMinutes = durationMinutes
         self.calories = calories
@@ -1822,6 +2129,20 @@ struct AddWorkoutView: View {
                     let weightText = setDraft.weight.trimmingCharacters(in: .whitespacesAndNewlines)
                     let repsText = setDraft.reps.trimmingCharacters(in: .whitespacesAndNewlines)
 
+                    if draft.isBodyweight {
+                        if repsText.isEmpty {
+                            continue
+                        }
+
+                        guard let repsValue = Int(repsText), repsValue > 0 else {
+                            hasPartialSet = true
+                            continue
+                        }
+
+                        setModels.append(WorkoutSet(id: UUID(), weightKg: 0, reps: repsValue))
+                        continue
+                    }
+
                     if weightText.isEmpty && repsText.isEmpty {
                         continue
                     }
@@ -1846,10 +2167,12 @@ struct AddWorkoutView: View {
                     setModels.append(WorkoutSet(id: UUID(), weightKg: weightValue, reps: repsValue))
                 }
 
-                let hasAnySetInput = draft.sets.contains {
-                    !$0.weight.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
-                    !$0.reps.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                }
+                let hasAnySetInput = draft.isBodyweight
+                    ? draft.sets.contains { !$0.reps.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+                    : draft.sets.contains {
+                        !$0.weight.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                        !$0.reps.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    }
 
                 if hasPartialSet {
                     hasInvalid = true
@@ -1970,7 +2293,7 @@ struct AddWorkoutView: View {
                         }
 
                         Button {
-                            drafts.append(ExerciseDraft())
+                            drafts.append(ExerciseDraft(weightUnit: store.defaultWeightUnit))
                         } label: {
                             HStack {
                                 Image(systemName: "plus.circle")
@@ -2016,7 +2339,7 @@ struct AddWorkoutView: View {
             if let template {
                 drafts = store.resolvedDrafts(for: template)
             } else {
-                drafts = [ExerciseDraft()]
+                drafts = [ExerciseDraft(weightUnit: store.defaultWeightUnit)]
             }
         }
     }
@@ -2027,21 +2350,24 @@ struct AddWorkoutView: View {
             case .weights:
                 let setDrafts = exercise.sets.map {
                     WorkoutSetDraft(
-                        weight: $0.weightKg == 0 ? "" : String(format: "%.1f", $0.weightKg),
+                        weight: $0.weightKg == 0 ? "" : String(format: "%.1f", weightValue($0.weightKg, unit: store.defaultWeightUnit)),
                         reps: "\($0.reps)"
                     )
                 }
+                let isBodyweight = exercise.sets.allSatisfy { $0.weightKg == 0 }
                 return ExerciseDraft(
                     name: exercise.name,
                     type: .weights,
                     sets: setDrafts.isEmpty ? [WorkoutSetDraft()] : setDrafts,
-                    weightUnit: .kg
+                    isBodyweight: isBodyweight,
+                    weightUnit: store.defaultWeightUnit
                 )
             case .cardio:
                 return ExerciseDraft(
                     name: exercise.name,
                     type: .cardio,
                     sets: [],
+                    weightUnit: store.defaultWeightUnit,
                     durationMinutes: formattedOptionalInt(exercise.durationMinutes),
                     calories: formattedOptionalInt(exercise.calories)
                 )
@@ -2089,6 +2415,13 @@ struct AddWorkoutView: View {
         guard let value else { return "" }
         return "\(value)"
     }
+
+    private func weightValue(_ kg: Double, unit: WeightUnit) -> Double {
+        if unit == .lb {
+            return kg * 2.20462262
+        }
+        return kg
+    }
 }
 
 struct ExerciseEditorRow: View {
@@ -2114,6 +2447,9 @@ struct ExerciseEditorRow: View {
                     typePlaceholder
                 } else {
                     typePicker
+                }
+                if showsMetrics && draft.type == .weights {
+                    bodyweightToggle
                 }
                 Spacer()
                 if let onMoveUp {
@@ -2150,21 +2486,18 @@ struct ExerciseEditorRow: View {
                         let setId = $set.wrappedValue.id
                         HStack(alignment: .center, spacing: 12) {
                             InputCard(title: "Reps", text: $set.reps, placeholder: "10", keyboard: .numberPad)
-                            InputCard(title: "Weight", text: $set.weight, placeholder: "10", keyboard: .decimalPad)
-                            UnitPillAligned(unit: $draft.weightUnit)
+                            if !draft.isBodyweight {
+                                InputCard(title: "Weight", text: $set.weight, placeholder: "10", keyboard: .decimalPad)
+                                UnitPillAligned(unit: $draft.weightUnit)
+                            }
                             if draft.sets.count > 1 {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text("Unit")
-                                        .font(.custom("Avenir Next", size: 12))
-                                        .foregroundStyle(.clear)
-                                    Button(role: .destructive) {
-                                        draft.sets.removeAll { $0.id == setId }
-                                    } label: {
-                                        Image(systemName: "minus.circle.fill")
-                                            .foregroundStyle(Color("Sand").opacity(0.7))
-                                    }
-                                    .frame(width: 32, height: 32)
+                                Button(role: .destructive) {
+                                    draft.sets.removeAll { $0.id == setId }
+                                } label: {
+                                    Image(systemName: "minus.circle.fill")
+                                        .foregroundStyle(Color("Sand").opacity(0.7))
                                 }
+                                .frame(width: 32, height: 32)
                             }
                         }
                         .padding(10)
@@ -2213,6 +2546,13 @@ struct ExerciseEditorRow: View {
             convertWeights(from: lastUnit, to: newValue)
             lastUnit = newValue
         }
+        .onChange(of: draft.isBodyweight) { _, isBodyweight in
+            if isBodyweight {
+                draft.sets = draft.sets.map { set in
+                    WorkoutSetDraft(id: set.id, weight: "", reps: set.reps)
+                }
+            }
+        }
         .onChange(of: knownType) { _, newValue in
             if let newValue {
                 draft.type = newValue
@@ -2221,6 +2561,11 @@ struct ExerciseEditorRow: View {
         .onChange(of: draft.name) { _, _ in
             if let knownType {
                 draft.type = knownType
+            }
+        }
+        .onChange(of: draft.type) { _, newValue in
+            if newValue == .cardio {
+                draft.isBodyweight = false
             }
         }
     }
@@ -2236,8 +2581,25 @@ struct ExerciseEditorRow: View {
         .scaleEffect(0.9)
     }
 
+    private var bodyweightToggle: some View {
+        Button {
+            draft.isBodyweight.toggle()
+        } label: {
+            Text("Bodyweight")
+                .font(.custom("Avenir Next", size: 12))
+                .foregroundStyle(draft.isBodyweight ? Color("Night") : Color("Sand"))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(
+                    Capsule()
+                        .fill(draft.isBodyweight ? Color("Sand") : Color("Sand").opacity(0.12))
+                )
+        }
+        .buttonStyle(.plain)
+    }
+
     private func convertWeights(from: WeightUnit, to: WeightUnit) {
-        guard from != to else { return }
+        guard from != to, !draft.isBodyweight else { return }
         let multiplier: Double
         if from == .kg && to == .lb {
             multiplier = 2.20462262
@@ -2246,13 +2608,17 @@ struct ExerciseEditorRow: View {
         }
         draft.sets = draft.sets.map { set in
             let value = Double(set.weight) ?? 0
-            let converted = value * multiplier
+            let converted = roundToHalf(value * multiplier)
             return WorkoutSetDraft(
                 id: set.id,
                 weight: value == 0 ? "" : String(format: "%.1f", converted),
                 reps: set.reps
             )
         }
+    }
+
+    private func roundToHalf(_ value: Double) -> Double {
+        (value * 2).rounded() / 2
     }
 
     private func typeBadge(for type: ExerciseType) -> some View {
@@ -2282,11 +2648,18 @@ struct ExerciseEditorRow: View {
 
 struct WorkoutSessionCard: View {
     let session: WorkoutSession
+    let sessionNumber: Int
     let onDelete: () -> Void
     let onSaveTemplate: (() -> Void)?
 
-    init(session: WorkoutSession, onDelete: @escaping () -> Void, onSaveTemplate: (() -> Void)? = nil) {
+    init(
+        session: WorkoutSession,
+        sessionNumber: Int,
+        onDelete: @escaping () -> Void,
+        onSaveTemplate: (() -> Void)? = nil
+    ) {
         self.session = session
+        self.sessionNumber = sessionNumber
         self.onDelete = onDelete
         self.onSaveTemplate = onSaveTemplate
     }
@@ -2298,7 +2671,7 @@ struct WorkoutSessionCard: View {
         let totalSets = weightExercises.reduce(0) { $0 + $1.sets.count }
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text(session.date.formatted(date: .abbreviated, time: .omitted))
+                Text("\(session.date.formatted(date: .abbreviated, time: .omitted)) • Session \(sessionNumber)")
                     .font(.custom("Avenir Next", size: 18))
                     .fontWeight(.semibold)
                     .foregroundStyle(Color("Sand"))
@@ -2396,6 +2769,32 @@ struct SessionDetailView: View {
                         .fontWeight(.semibold)
                         .foregroundStyle(Color("Sand"))
 
+                    HStack(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Start")
+                                .font(.custom("Avenir Next", size: 12))
+                                .foregroundStyle(Color("Sand").opacity(0.6))
+                            Text(session.date.formatted(date: .abbreviated, time: .shortened))
+                                .font(.custom("Avenir Next", size: 14))
+                                .foregroundStyle(Color("Sand"))
+                        }
+                        Spacer()
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("End")
+                                .font(.custom("Avenir Next", size: 12))
+                                .foregroundStyle(Color("Sand").opacity(0.6))
+                            Text(session.endDate.formatted(date: .abbreviated, time: .shortened))
+                                .font(.custom("Avenir Next", size: 14))
+                                .foregroundStyle(Color("Sand"))
+                        }
+                    }
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        RoundedRectangle(cornerRadius: 16)
+                            .fill(Color("Card").opacity(0.85))
+                    )
+
                     ForEach(session.mergedExercises()) { exercise in
                         ExerciseDetailCard(exercise: exercise)
                     }
@@ -2436,7 +2835,7 @@ struct ExerciseDetailCard: View {
             case .weights:
                 VStack(alignment: .leading, spacing: 6) {
                     ForEach(Array(exercise.sets.enumerated()), id: \.element.id) { index, set in
-                        Text("Set \(index + 1): \(formattedWeight(set.weightKg)) kg x \(set.reps)")
+                        Text("Set \(index + 1): \(weightLabel(for: set.weightKg)) x \(set.reps)")
                             .font(.custom("Avenir Next", size: 13))
                             .foregroundStyle(Color("Sand").opacity(0.7))
                     }
@@ -2468,9 +2867,9 @@ struct ExerciseDetailCard: View {
         )
     }
 
-    private func formattedWeight(_ kg: Double) -> String {
-        if kg == 0 { return "0" }
-        return String(format: "%.1f", kg)
+    private func weightLabel(for kg: Double) -> String {
+        if kg == 0 { return "Bodyweight" }
+        return String(format: "%.1f kg", kg)
     }
 }
 
@@ -2929,7 +3328,7 @@ struct AddTemplateView: View {
                                 onDelete: {
                                     drafts.removeAll { $0.id == draft.id }
                                     if drafts.isEmpty {
-                                        drafts.append(ExerciseDraft())
+                                        drafts.append(ExerciseDraft(weightUnit: store.defaultWeightUnit))
                                     }
                                 },
                                 onMoveUp: nil,
@@ -2938,7 +3337,7 @@ struct AddTemplateView: View {
                         }
 
                         Button {
-                            drafts.append(ExerciseDraft())
+                            drafts.append(ExerciseDraft(weightUnit: store.defaultWeightUnit))
                         } label: {
                             HStack {
                                 Image(systemName: "plus.circle")
@@ -2989,7 +3388,8 @@ struct EditTemplateView: View {
         _drafts = State(initialValue: template.exercises.map {
             ExerciseDraft(
                 name: $0.name,
-                type: $0.type
+                type: $0.type,
+                weightUnit: store.defaultWeightUnit
             )
         })
     }
@@ -3049,7 +3449,7 @@ struct EditTemplateView: View {
                             onDelete: {
                                 drafts.removeAll { $0.id == draft.id }
                                 if drafts.isEmpty {
-                                    drafts.append(ExerciseDraft())
+                                    drafts.append(ExerciseDraft(weightUnit: store.defaultWeightUnit))
                                 }
                             },
                             onMoveUp: nil,
@@ -3063,7 +3463,7 @@ struct EditTemplateView: View {
                     }
 
                     Button {
-                        drafts.append(ExerciseDraft())
+                        drafts.append(ExerciseDraft(weightUnit: store.defaultWeightUnit))
                     } label: {
                         HStack {
                             Image(systemName: "plus.circle")
