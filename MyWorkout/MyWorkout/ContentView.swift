@@ -10,6 +10,8 @@ import Combine
 import Charts
 import UniformTypeIdentifiers
 import UIKit
+import AVFoundation
+import CoreImage.CIFilterBuiltins
 
 enum ExerciseType: String, Codable, CaseIterable {
     case weights
@@ -706,12 +708,10 @@ final class WorkoutStore: ObservableObject {
                                 repsPlaceholder: "\(set.reps)"
                             )
                         }
-                        let isBodyweight = latest.exercise.sets.allSatisfy { $0.weightKg == 0 }
                         return ExerciseDraft(
                             name: latest.exercise.name,
                             type: .weights,
                             sets: setDrafts.isEmpty ? [WorkoutSetDraft()] : setDrafts,
-                            isBodyweight: isBodyweight,
                             weightUnit: defaultWeightUnit
                         )
                     }
@@ -721,7 +721,6 @@ final class WorkoutStore: ObservableObject {
                 name: trimmedName,
                 type: exercise.type,
                 sets: exercise.type == .weights ? [WorkoutSetDraft()] : [],
-                isBodyweight: false,
                 weightUnit: defaultWeightUnit
             )
         }
@@ -1249,6 +1248,8 @@ struct HomeView: View {
     @State private var templateImportErrorMessage = ""
     @State private var showTemplateShareNotice = false
     @State private var showTemplateImportSuccess = false
+    @State private var templateSharePayload: TemplateShareSheetPayload?
+    @State private var showTemplateScanner = false
 
     var body: some View {
         ZStack {
@@ -1302,6 +1303,27 @@ struct HomeView: View {
         }
         .sheet(item: $editingTemplate) { template in
             EditTemplateView(store: store, template: template)
+        }
+        .sheet(item: $templateSharePayload) { payload in
+            TemplateShareSheet(
+                code: payload.code,
+                onCopy: {
+                    UIPasteboard.general.string = payload.code
+                    showTemplateShareNotice = true
+                }
+            )
+        }
+        .sheet(isPresented: $showTemplateScanner) {
+            TemplateQRScanner { code in
+                showTemplateScanner = false
+                do {
+                    try store.importTemplate(from: code)
+                    showTemplateImportSuccess = true
+                } catch {
+                    templateImportErrorMessage = "Invalid template code."
+                    showTemplateImportError = true
+                }
+            }
         }
         .alert("Import Template", isPresented: $showTemplateImport) {
             TextField("Paste template code", text: $templateImportText)
@@ -1387,6 +1409,11 @@ struct HomeView: View {
                     } label: {
                         Label("Import Template", systemImage: "square.and.arrow.down")
                     }
+                    Button {
+                        showTemplateScanner = true
+                    } label: {
+                        Label("Scan QR", systemImage: "qrcode.viewfinder")
+                    }
                 } label: {
                     Image(systemName: "plus")
                         .font(.custom("Avenir Next", size: 16))
@@ -1410,8 +1437,7 @@ struct HomeView: View {
                                 onShare: {
                                     do {
                                         let code = try store.shareString(for: template)
-                                        UIPasteboard.general.string = code
-                                        showTemplateShareNotice = true
+                                        templateSharePayload = TemplateShareSheetPayload(code: code)
                                     } catch {
                                         templateImportErrorMessage = "Unable to share template."
                                         showTemplateImportError = true
@@ -1547,6 +1573,7 @@ struct HistoryView: View {
                                 WorkoutSessionCard(
                                     session: session,
                                     sessionNumber: sessionNumbers[session.id] ?? 1,
+                                    onEdit: { editingSession = session },
                                     onDelete: { store.removeSession(session) },
                                     onSaveTemplate: { store.addTemplate(from: session) }
                                 )
@@ -2387,35 +2414,38 @@ struct ExerciseDraft: Identifiable, Equatable {
     var name: String
     var type: ExerciseType
     var sets: [WorkoutSetDraft]
-    var isBodyweight: Bool
     var weightUnit: WeightUnit
     var durationMinutes: String
     var calories: String
     var durationPlaceholder: String
     var caloriesPlaceholder: String
+    var entryId: UUID?
+    var loggedAt: Date?
 
     init(
         id: UUID = UUID(),
         name: String = "",
         type: ExerciseType = .weights,
         sets: [WorkoutSetDraft] = [WorkoutSetDraft()],
-        isBodyweight: Bool = false,
         weightUnit: WeightUnit = .kg,
         durationMinutes: String = "",
         calories: String = "",
         durationPlaceholder: String = "",
-        caloriesPlaceholder: String = ""
+        caloriesPlaceholder: String = "",
+        entryId: UUID? = nil,
+        loggedAt: Date? = nil
     ) {
         self.id = id
         self.name = name
         self.type = type
         self.sets = sets
-        self.isBodyweight = isBodyweight
         self.weightUnit = weightUnit
         self.durationMinutes = durationMinutes
         self.calories = calories
         self.durationPlaceholder = durationPlaceholder
         self.caloriesPlaceholder = caloriesPlaceholder
+        self.entryId = entryId
+        self.loggedAt = loggedAt
     }
 }
 
@@ -2466,20 +2496,6 @@ struct AddWorkoutView: View {
                     let weightText = setDraft.weight.trimmingCharacters(in: .whitespacesAndNewlines)
                     let repsText = setDraft.reps.trimmingCharacters(in: .whitespacesAndNewlines)
 
-                    if draft.isBodyweight {
-                        if repsText.isEmpty {
-                            continue
-                        }
-
-                        guard let repsValue = Int(repsText), repsValue > 0 else {
-                            hasPartialSet = true
-                            continue
-                        }
-
-                        setModels.append(WorkoutSet(id: UUID(), weightKg: 0, reps: repsValue))
-                        continue
-                    }
-
                     if weightText.isEmpty && repsText.isEmpty {
                         continue
                     }
@@ -2496,7 +2512,7 @@ struct AddWorkoutView: View {
                     }
 
                     let weightValue = draft.weightUnit == .lb ? inputValue * 0.45359237 : inputValue
-                    guard repsValue > 0, weightValue > 0 else {
+                    guard repsValue > 0, weightValue >= 0 else {
                         hasPartialSet = true
                         continue
                     }
@@ -2504,12 +2520,10 @@ struct AddWorkoutView: View {
                     setModels.append(WorkoutSet(id: UUID(), weightKg: weightValue, reps: repsValue))
                 }
 
-                let hasAnySetInput = draft.isBodyweight
-                    ? draft.sets.contains { !$0.reps.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-                    : draft.sets.contains {
-                        !$0.weight.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
-                        !$0.reps.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    }
+                let hasAnySetInput = draft.sets.contains {
+                    !$0.weight.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                    !$0.reps.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                }
 
                 if hasPartialSet {
                     hasInvalid = true
@@ -2532,13 +2546,13 @@ struct AddWorkoutView: View {
 
                 validExercises.append(
                     WorkoutExercise(
-                        id: UUID(),
+                        id: draft.entryId ?? UUID(),
                         name: name,
                         type: .weights,
                         sets: setModels,
                         durationMinutes: nil,
                         calories: nil,
-                        loggedAt: workoutDate
+                        loggedAt: draft.loggedAt ?? workoutDate
                     )
                 )
             case .cardio:
@@ -2567,13 +2581,13 @@ struct AddWorkoutView: View {
 
                 validExercises.append(
                     WorkoutExercise(
-                        id: UUID(),
+                        id: draft.entryId ?? UUID(),
                         name: name,
                         type: .cardio,
                         sets: [],
                         durationMinutes: durationValue,
                         calories: caloriesValue,
-                        loggedAt: workoutDate
+                        loggedAt: draft.loggedAt ?? workoutDate
                     )
                 )
             }
@@ -2645,26 +2659,42 @@ struct AddWorkoutView: View {
                     .padding(24)
                 }
 
-                Button {
-                    if let session {
-                        store.updateSession(session, date: workoutDate, exercises: validExercises)
-                    } else {
-                        store.addSession(date: workoutDate, exercises: validExercises)
+                VStack(spacing: 10) {
+                    Button {
+                        if let session {
+                            store.updateSession(session, date: workoutDate, exercises: validExercises)
+                        } else {
+                            store.addSession(date: workoutDate, exercises: validExercises)
+                        }
+                        dismiss()
+                    } label: {
+                        Text(saveLabel)
+                            .font(.custom("Avenir Next", size: 18))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .foregroundStyle(Color("Night"))
+                            .background(Color("Sand"))
+                            .clipShape(Capsule())
                     }
-                    dismiss()
-                } label: {
-                    Text(saveLabel)
-                        .font(.custom("Avenir Next", size: 18))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                        .foregroundStyle(Color("Night"))
-                        .background(Color("Sand"))
-                        .clipShape(Capsule())
-                        .padding(.horizontal, 24)
-                        .padding(.bottom, 12)
+                    .disabled(!canSave)
+                    .opacity(canSave ? 1 : 0.4)
+
+                    Button {
+                        dismiss()
+                    } label: {
+                        Text("Cancel")
+                            .font(.custom("Avenir Next", size: 18))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .foregroundStyle(Color("Sand"))
+                            .background(
+                                Capsule()
+                                    .stroke(Color("Sand").opacity(0.6), lineWidth: 1)
+                            )
+                    }
                 }
-                .disabled(!canSave)
-                .opacity(canSave ? 1 : 0.4)
+                .padding(.horizontal, 24)
+                .padding(.bottom, 12)
             }
         }
         .onAppear {
@@ -2684,7 +2714,7 @@ struct AddWorkoutView: View {
     }
 
     private func drafts(for session: WorkoutSession) -> [ExerciseDraft] {
-        session.mergedExercises().map { exercise in
+        session.exercises.map { exercise in
             switch exercise.type {
             case .weights:
                 let setDrafts = exercise.sets.map {
@@ -2693,13 +2723,13 @@ struct AddWorkoutView: View {
                         reps: "\($0.reps)"
                     )
                 }
-                let isBodyweight = exercise.sets.allSatisfy { $0.weightKg == 0 }
                 return ExerciseDraft(
                     name: exercise.name,
                     type: .weights,
                     sets: setDrafts.isEmpty ? [WorkoutSetDraft()] : setDrafts,
-                    isBodyweight: isBodyweight,
-                    weightUnit: store.defaultWeightUnit
+                    weightUnit: store.defaultWeightUnit,
+                    entryId: exercise.id,
+                    loggedAt: exercise.loggedAt
                 )
             case .cardio:
                 return ExerciseDraft(
@@ -2708,7 +2738,9 @@ struct AddWorkoutView: View {
                     sets: [],
                     weightUnit: store.defaultWeightUnit,
                     durationMinutes: formattedOptionalInt(exercise.durationMinutes),
-                    calories: formattedOptionalInt(exercise.calories)
+                    calories: formattedOptionalInt(exercise.calories),
+                    entryId: exercise.id,
+                    loggedAt: exercise.loggedAt
                 )
             }
         }
@@ -2776,120 +2808,9 @@ struct ExerciseEditorRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .center, spacing: 12) {
-                Text("Exercise")
-                    .font(.custom("Avenir Next", size: 15))
-                    .foregroundStyle(Color("Sand").opacity(0.6))
-                let trimmedName = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
-                if let knownType {
-                    typeBadge(for: knownType)
-                } else if trimmedName.isEmpty {
-                    typePlaceholder
-                } else {
-                    typePicker
-                }
-                if showsMetrics && draft.type == .weights {
-                    bodyweightToggle
-                }
-                Spacer()
-                if let onMoveUp {
-                    Button(action: onMoveUp) {
-                        Image(systemName: "arrow.up")
-                            .foregroundStyle(Color("Sand").opacity(0.7))
-                    }
-                }
-                if let onMoveDown {
-                    Button(action: onMoveDown) {
-                        Image(systemName: "arrow.down")
-                            .foregroundStyle(Color("Sand").opacity(0.7))
-                    }
-                }
-                Button(role: .destructive) {
-                    onDelete()
-                } label: {
-                    Image(systemName: "trash")
-                        .foregroundStyle(Color("Sand").opacity(0.8))
-                }
-            }
-
-            ExerciseNameField(
-                title: "Exercise",
-                showsTitle: false,
-                text: $draft.name,
-                suggestions: suggestions,
-                onFocusChange: { isNameFocused = $0 }
-            )
-            .zIndex(2)
-
-            if showsMetrics {
-                if draft.type == .weights {
-                    ForEach($draft.sets) { $set in
-                        let setId = $set.wrappedValue.id
-                        HStack(alignment: .center, spacing: 12) {
-                            InputCard(
-                                title: "Reps",
-                                text: $set.reps,
-                                placeholder: set.repsPlaceholder.isEmpty ? "10" : set.repsPlaceholder,
-                                keyboard: .numberPad
-                            )
-                            if !draft.isBodyweight {
-                                InputCard(
-                                    title: "Weight",
-                                    text: $set.weight,
-                                    placeholder: set.weightPlaceholder.isEmpty ? "10" : set.weightPlaceholder,
-                                    keyboard: .decimalPad
-                                )
-                                UnitPillAligned(unit: $draft.weightUnit)
-                            }
-                            if draft.sets.count > 1 {
-                                Button(role: .destructive) {
-                                    draft.sets.removeAll { $0.id == setId }
-                                } label: {
-                                    Image(systemName: "minus.circle.fill")
-                                        .foregroundStyle(Color("Sand").opacity(0.7))
-                                }
-                                .frame(width: 32, height: 32)
-                            }
-                        }
-                        .padding(10)
-                        .background(
-                            RoundedRectangle(cornerRadius: 14)
-                                .fill(Color("Card").opacity(0.6))
-                        )
-                    }
-                    .animation(.easeInOut(duration: 0.2), value: draft.sets.count)
-
-                    Divider()
-                        .overlay(Color("Sand").opacity(0.12))
-
-                    Button {
-                        draft.sets.append(WorkoutSetDraft())
-                    } label: {
-                        HStack {
-                            Image(systemName: "plus.circle")
-                            Text("Add Set")
-                        }
-                        .font(.custom("Avenir Next", size: 16))
-                        .foregroundStyle(Color("Sand"))
-                    }
-                    .buttonStyle(.plain)
-                } else {
-                    HStack(spacing: 12) {
-                        InputCard(
-                            title: "Time (min)",
-                            text: $draft.durationMinutes,
-                            placeholder: draft.durationPlaceholder.isEmpty ? "20" : draft.durationPlaceholder,
-                            keyboard: .numberPad
-                        )
-                        InputCard(
-                            title: "Calories",
-                            text: $draft.calories,
-                            placeholder: draft.caloriesPlaceholder.isEmpty ? "150" : draft.caloriesPlaceholder,
-                            keyboard: .numberPad
-                        )
-                    }
-                }
-            }
+            headerRow
+            nameField
+            metricsSection
         }
         .padding(12)
         .background(
@@ -2908,19 +2829,6 @@ struct ExerciseEditorRow: View {
             convertWeights(from: lastUnit, to: newValue)
             lastUnit = newValue
         }
-        .onChange(of: draft.isBodyweight) { _, isBodyweight in
-            if isBodyweight {
-                draft.sets = draft.sets.map { set in
-                    WorkoutSetDraft(
-                        id: set.id,
-                        weight: "",
-                        reps: set.reps,
-                        weightPlaceholder: "",
-                        repsPlaceholder: set.repsPlaceholder
-                    )
-                }
-            }
-        }
         .onChange(of: knownType) { _, newValue in
             if let newValue {
                 draft.type = newValue
@@ -2933,8 +2841,137 @@ struct ExerciseEditorRow: View {
         }
         .onChange(of: draft.type) { _, newValue in
             if newValue == .cardio {
-                draft.isBodyweight = false
+                draft.sets = []
+            } else if draft.sets.isEmpty {
+                draft.sets = [WorkoutSetDraft()]
             }
+        }
+    }
+
+    private var headerRow: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Text("Exercise")
+                .font(.custom("Avenir Next", size: 15))
+                .foregroundStyle(Color("Sand").opacity(0.6))
+            if let knownType {
+                typeBadge(for: knownType)
+            } else if draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                typePlaceholder
+            } else {
+                typePicker
+            }
+            Spacer()
+            if let onMoveUp {
+                Button(action: onMoveUp) {
+                    Image(systemName: "arrow.up")
+                        .foregroundStyle(Color("Sand").opacity(0.7))
+                }
+            }
+            if let onMoveDown {
+                Button(action: onMoveDown) {
+                    Image(systemName: "arrow.down")
+                        .foregroundStyle(Color("Sand").opacity(0.7))
+                }
+            }
+            Button(role: .destructive) {
+                onDelete()
+            } label: {
+                Image(systemName: "trash")
+                    .foregroundStyle(Color("Sand").opacity(0.8))
+            }
+        }
+    }
+
+    private var nameField: some View {
+        ExerciseNameField(
+            title: "Exercise",
+            showsTitle: false,
+            text: $draft.name,
+            suggestions: suggestions,
+            onFocusChange: { isNameFocused = $0 }
+        )
+        .zIndex(2)
+    }
+
+    @ViewBuilder
+    private var metricsSection: some View {
+        if showsMetrics {
+            if draft.type == .weights {
+                weightsSection
+            } else {
+                cardioSection
+            }
+        }
+    }
+
+    private var weightsSection: some View {
+        VStack(spacing: 10) {
+            ForEach($draft.sets) { $set in
+                let setId = $set.wrappedValue.id
+                HStack(alignment: .center, spacing: 12) {
+                    InputCard(
+                        title: "Reps",
+                        text: $set.reps,
+                        placeholder: set.repsPlaceholder.isEmpty ? "10" : set.repsPlaceholder,
+                        keyboard: .numberPad
+                    )
+                    InputCard(
+                        title: "Weight",
+                        text: $set.weight,
+                        placeholder: set.weightPlaceholder.isEmpty ? "10" : set.weightPlaceholder,
+                        keyboard: .decimalPad
+                    )
+                    if isBodyweightSet(set) {
+                        BodyweightPillAligned(isCompact: draft.sets.count > 1)
+                    } else {
+                        UnitPillAligned(unit: $draft.weightUnit)
+                    }
+                    if draft.sets.count > 1 {
+                        SetRemoveButtonAligned {
+                            draft.sets.removeAll { $0.id == setId }
+                        }
+                    }
+                }
+                .padding(5)
+                .background(
+                    RoundedRectangle(cornerRadius: 14)
+                        .fill(Color("Card").opacity(0.6))
+                )
+            }
+            .animation(.easeInOut(duration: 0.2), value: draft.sets.count)
+
+            Divider()
+                .overlay(Color("Sand").opacity(0.12))
+
+            Button {
+                draft.sets.append(WorkoutSetDraft())
+            } label: {
+                HStack {
+                    Image(systemName: "plus.circle")
+                    Text("Add Set")
+                }
+                .font(.custom("Avenir Next", size: 16))
+                .foregroundStyle(Color("Sand"))
+            }
+            .buttonStyle(.plain)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var cardioSection: some View {
+        HStack(spacing: 12) {
+            InputCard(
+                title: "Time (min)",
+                text: $draft.durationMinutes,
+                placeholder: draft.durationPlaceholder.isEmpty ? "20" : draft.durationPlaceholder,
+                keyboard: .numberPad
+            )
+            InputCard(
+                title: "Calories",
+                text: $draft.calories,
+                placeholder: draft.caloriesPlaceholder.isEmpty ? "150" : draft.caloriesPlaceholder,
+                keyboard: .numberPad
+            )
         }
     }
 
@@ -2949,25 +2986,8 @@ struct ExerciseEditorRow: View {
         .scaleEffect(0.9)
     }
 
-    private var bodyweightToggle: some View {
-        Button {
-            draft.isBodyweight.toggle()
-        } label: {
-            Text("Bodyweight")
-                .font(.custom("Avenir Next", size: 12))
-                .foregroundStyle(draft.isBodyweight ? Color("Night") : Color("Sand"))
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(
-                    Capsule()
-                        .fill(draft.isBodyweight ? Color("Sand") : Color("Sand").opacity(0.12))
-                )
-        }
-        .buttonStyle(.plain)
-    }
-
     private func convertWeights(from: WeightUnit, to: WeightUnit) {
-        guard from != to, !draft.isBodyweight else { return }
+        guard from != to else { return }
         let multiplier: Double
         if from == .kg && to == .lb {
             multiplier = 2.20462262
@@ -2988,6 +3008,13 @@ struct ExerciseEditorRow: View {
             )
         }
     }
+
+    private func isBodyweightSet(_ set: WorkoutSetDraft) -> Bool {
+        let weight = set.weight.trimmingCharacters(in: .whitespacesAndNewlines)
+        return weight == "0"
+    }
+
+
 
     private func roundToHalf(_ value: Double) -> Double {
         (value * 2).rounded() / 2
@@ -3021,17 +3048,20 @@ struct ExerciseEditorRow: View {
 struct WorkoutSessionCard: View {
     let session: WorkoutSession
     let sessionNumber: Int
+    let onEdit: () -> Void
     let onDelete: () -> Void
     let onSaveTemplate: (() -> Void)?
 
     init(
         session: WorkoutSession,
         sessionNumber: Int,
+        onEdit: @escaping () -> Void,
         onDelete: @escaping () -> Void,
         onSaveTemplate: (() -> Void)? = nil
     ) {
         self.session = session
         self.sessionNumber = sessionNumber
+        self.onEdit = onEdit
         self.onDelete = onDelete
         self.onSaveTemplate = onSaveTemplate
     }
@@ -3092,6 +3122,11 @@ struct WorkoutSessionCard: View {
                 } label: {
                     Label("Save as Template", systemImage: "square.and.arrow.down")
                 }
+            }
+            Button {
+                onEdit()
+            } label: {
+                Label("Edit", systemImage: "pencil")
             }
             Button(role: .destructive) {
                 onDelete()
@@ -3491,7 +3526,9 @@ struct InputCard: View {
                 .font(.custom("Avenir Next", size: 14))
                 .keyboardType(keyboard)
                 .foregroundStyle(Color("Sand"))
-                .padding(10)
+                // .padding(10)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
                 .background(
                     RoundedRectangle(cornerRadius: 12)
                         .fill(Color("Card").opacity(0.85))
@@ -3540,6 +3577,72 @@ struct UnitPillAligned: View {
                         )
                 )
         }
+    }
+}
+
+struct SetRemoveButtonAligned: View {
+    let action: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Unit")
+                .font(.custom("Avenir Next", size: 12))
+                .foregroundStyle(.clear)
+            Button(role: .destructive, action: action) {
+                Image(systemName: "minus.circle.fill")
+                    .foregroundStyle(Color("Sand").opacity(0.7))
+            }
+            .frame(width: 32, height: 32)
+        }
+        .padding(.top, 2)
+    }
+}
+
+struct BodyweightPillAligned: View {
+    let isCompact: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Unit")
+                .font(.custom("Avenir Next", size: 12))
+                .foregroundStyle(.clear)
+            Group {
+                if isCompact {
+                    Text("BW")
+                        .font(.custom("Avenir Next", size: 13))
+                        .foregroundStyle(Color("Sand"))
+                        .frame(width: 44, height: 32)
+                        .background(
+                            Capsule()
+                                .fill(Color("Sand").opacity(0.12))
+                                .overlay(
+                                    Capsule()
+                                        .stroke(Color("Sand").opacity(0.18), lineWidth: 1)
+                                )
+                        )
+                        .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                } else {
+                    Text("Bodyweight")
+                        .font(.custom("Avenir Next", size: 13))
+                        .foregroundStyle(Color("Sand"))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.9)
+                        .frame(minWidth: 88, minHeight: 32)
+                        .padding(.horizontal, 12)
+                        .background(
+                            Capsule()
+                                .fill(Color("Sand").opacity(0.12))
+                                .overlay(
+                                    Capsule()
+                                        .stroke(Color("Sand").opacity(0.18), lineWidth: 1)
+                                )
+                        )
+                        .transition(.opacity.combined(with: .scale(scale: 1.02)))
+                }
+            }
+            .animation(.easeInOut(duration: 0.2), value: isCompact)
+        }
+        .padding(.top, 2)
     }
 }
 
@@ -3628,6 +3731,235 @@ struct TemplateCard: View {
     }
 }
 
+struct TemplateShareSheet: View {
+    let code: String
+    let onCopy: () -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        ZStack {
+            LinearGradient(
+                colors: [Color("Night"), Color("Coal")],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("Share Template")
+                        .font(.custom("Avenir Next", size: 26))
+                        .fontWeight(.semibold)
+                        .foregroundStyle(Color("Sand"))
+
+                    QRCodeView(text: code)
+                        .frame(maxWidth: .infinity, alignment: .center)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Template Code")
+                            .font(.custom("Avenir Next", size: 14))
+                            .foregroundStyle(Color("Sand").opacity(0.7))
+                        ScrollView {
+                            Text(code)
+                                .font(.custom("Avenir Next", size: 12))
+                                .foregroundStyle(Color("Sand"))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(12)
+                        }
+                        .frame(maxHeight: 140)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12)
+                                .fill(Color("Card").opacity(0.9))
+                        )
+                    }
+
+                    Button {
+                        onCopy()
+                    } label: {
+                        Text("Copy Code")
+                            .font(.custom("Avenir Next", size: 16))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .foregroundStyle(Color("Night"))
+                            .background(Color("Sand"))
+                            .clipShape(Capsule())
+                    }
+
+                    Button {
+                        dismiss()
+                    } label: {
+                        Text("Done")
+                            .font(.custom("Avenir Next", size: 16))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .foregroundStyle(Color("Sand"))
+                            .background(
+                                Capsule()
+                                    .stroke(Color("Sand").opacity(0.5), lineWidth: 1)
+                            )
+                    }
+                }
+                .padding(24)
+            }
+        }
+    }
+}
+
+struct TemplateShareSheetPayload: Identifiable {
+    let id = UUID()
+    let code: String
+}
+
+struct QRCodeView: View {
+    let text: String
+    private let context = CIContext()
+    private let filter = CIFilter.qrCodeGenerator()
+
+    var body: some View {
+        Group {
+            if let image = generateImage() {
+                Image(uiImage: image)
+                    .interpolation(.none)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 220, height: 220)
+                    .background(
+                        RoundedRectangle(cornerRadius: 18)
+                            .fill(Color("Card").opacity(0.9))
+                    )
+            } else {
+                Text("Unable to generate QR code.")
+                    .font(.custom("Avenir Next", size: 12))
+                    .foregroundStyle(Color("Sand").opacity(0.7))
+            }
+        }
+    }
+
+    private func generateImage() -> UIImage? {
+        filter.message = Data(text.utf8)
+        filter.correctionLevel = "M"
+        guard let outputImage = filter.outputImage else { return nil }
+        let scaled = outputImage.transformed(by: CGAffineTransform(scaleX: 10, y: 10))
+        guard let cgImage = context.createCGImage(scaled, from: scaled.extent) else { return nil }
+        return UIImage(cgImage: cgImage)
+    }
+}
+
+struct TemplateQRScanner: View {
+    let onScan: (String) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        ZStack {
+            if AVCaptureDevice.default(for: .video) == nil {
+                Text("Camera unavailable on this device.")
+                    .font(.custom("Avenir Next", size: 14))
+                    .foregroundStyle(Color("Sand"))
+            } else {
+                QRScannerView { code in
+                    onScan(code)
+                }
+                .ignoresSafeArea()
+            }
+
+            VStack {
+                HStack {
+                    Button("Close") {
+                        dismiss()
+                    }
+                    .font(.custom("Avenir Next", size: 14))
+                    .foregroundStyle(Color("Sand"))
+                    Spacer()
+                    Text("Scan QR")
+                        .font(.custom("Avenir Next", size: 14))
+                        .foregroundStyle(Color("Sand").opacity(0.7))
+                    Spacer()
+                    Color.clear.frame(width: 44, height: 1)
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 20)
+                Spacer()
+            }
+        }
+        .background(Color("Night").ignoresSafeArea())
+    }
+}
+
+struct QRScannerView: UIViewRepresentable {
+    let onScan: (String) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onScan: onScan)
+    }
+
+    func makeUIView(context: Context) -> UIView {
+        let view = PreviewView()
+        let session = AVCaptureSession()
+        session.sessionPreset = .high
+        context.coordinator.session = session
+
+        guard let device = AVCaptureDevice.default(for: .video),
+              let input = try? AVCaptureDeviceInput(device: device),
+              session.canAddInput(input) else {
+            return view
+        }
+        session.addInput(input)
+
+        let output = AVCaptureMetadataOutput()
+        guard session.canAddOutput(output) else { return view }
+        session.addOutput(output)
+        output.setMetadataObjectsDelegate(context.coordinator, queue: DispatchQueue.main)
+        output.metadataObjectTypes = [.qr]
+
+        if let preview = view.layer as? AVCaptureVideoPreviewLayer {
+            preview.session = session
+            preview.videoGravity = .resizeAspectFill
+            context.coordinator.previewLayer = preview
+        }
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            session.startRunning()
+        }
+        return view
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        if let preview = uiView.layer as? AVCaptureVideoPreviewLayer,
+           let connection = preview.connection,
+           connection.isVideoRotationAngleSupported(0) {
+            connection.videoRotationAngle = 0
+        }
+    }
+
+    final class PreviewView: UIView {
+        override class var layerClass: AnyClass {
+            AVCaptureVideoPreviewLayer.self
+        }
+    }
+
+    final class Coordinator: NSObject, AVCaptureMetadataOutputObjectsDelegate {
+        let onScan: (String) -> Void
+        var session: AVCaptureSession?
+        weak var previewLayer: AVCaptureVideoPreviewLayer?
+
+        init(onScan: @escaping (String) -> Void) {
+            self.onScan = onScan
+        }
+
+        func metadataOutput(
+            _ output: AVCaptureMetadataOutput,
+            didOutput metadataObjects: [AVMetadataObject],
+            from connection: AVCaptureConnection
+        ) {
+            guard let object = metadataObjects.first as? AVMetadataMachineReadableCodeObject,
+                  object.type == .qr,
+                  let value = object.stringValue else { return }
+            session?.stopRunning()
+            onScan(value)
+        }
+    }
+}
+
 struct AddTemplateView: View {
     @ObservedObject var store: WorkoutStore
     @Environment(\.dismiss) private var dismiss
@@ -3681,78 +4013,98 @@ struct AddTemplateView: View {
                         .padding(.bottom, 12)
                 }
 
-                List {
-                    ForEach($drafts) { $draft in
-                        ExerciseEditorRow(
-                            draft: $draft,
-                            suggestions: store.exerciseNameCatalog(),
-                            showsMetrics: false,
-                            knownType: store.exerciseType(for: draft.name),
-                            onDelete: {
-                                drafts.removeAll { $0.id == draft.id }
-                                if drafts.isEmpty {
-                                    drafts.append(ExerciseDraft(weightUnit: store.defaultWeightUnit))
-                                }
-                            },
-                            onMoveUp: nil,
-                            onMoveDown: nil
-                        )
-                        .listRowInsets(EdgeInsets(top: 4, leading: 24, bottom: 4, trailing: 16))
-                        .listRowBackground(Color.clear)
-                        .listRowSeparator(.hidden)
-                        .contentShape(Rectangle())
-                        .onLongPressGesture {
-                            editMode = .active
-                        }
+                templateList
+
+                VStack(spacing: 10) {
+                    Button {
+                        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+                        store.addTemplate(title: trimmedTitle, exercises: validExercises)
+                        dismiss()
+                    } label: {
+                        Text("Save Template")
+                            .font(.custom("Avenir Next", size: 18))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .foregroundStyle(Color("Night"))
+                            .background(Color("Sand"))
+                            .clipShape(Capsule())
                     }
-                    .onMove { source, destination in
-                        drafts.move(fromOffsets: source, toOffset: destination)
-                        editMode = .inactive
-                    }
+                    .disabled(!canSave)
+                    .opacity(canSave ? 1 : 0.4)
 
                     Button {
-                        drafts.append(ExerciseDraft(weightUnit: store.defaultWeightUnit))
+                        dismiss()
                     } label: {
-                        HStack {
-                            Image(systemName: "plus.circle")
-                            Text("Add Exercise")
-                        }
-                        .font(.custom("Avenir Next", size: 16))
-                        .foregroundStyle(Color("Sand"))
+                        Text("Cancel")
+                            .font(.custom("Avenir Next", size: 18))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .foregroundStyle(Color("Sand"))
+                            .background(
+                                Capsule()
+                                    .stroke(Color("Sand").opacity(0.6), lineWidth: 1)
+                            )
                     }
-                    .listRowBackground(Color.clear)
-                    .listRowInsets(EdgeInsets(top: 8, leading: 24, bottom: 16, trailing: 16))
-                    .buttonStyle(.plain)
-
-                    Color.clear
-                        .frame(height: 120)
-                        .listRowBackground(Color.clear)
-                        .listRowSeparator(.hidden)
                 }
-                .listStyle(.plain)
-                .listRowSeparator(.hidden)
-                .scrollContentBackground(.hidden)
-                .environment(\.editMode, $editMode)
-
-                Button {
-                    let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
-                    store.addTemplate(title: trimmedTitle, exercises: validExercises)
-                    dismiss()
-                } label: {
-                    Text("Save Template")
-                        .font(.custom("Avenir Next", size: 18))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                        .foregroundStyle(Color("Night"))
-                        .background(Color("Sand"))
-                        .clipShape(Capsule())
-                        .padding(.horizontal, 24)
-                        .padding(.bottom, 12)
-                }
-                .disabled(!canSave)
-                .opacity(canSave ? 1 : 0.4)
+                .padding(.horizontal, 24)
+                .padding(.bottom, 12)
             }
         }
+    }
+
+    private var templateList: some View {
+        List {
+            ForEach($drafts) { $draft in
+                ExerciseEditorRow(
+                    draft: $draft,
+                    suggestions: store.exerciseNameCatalog(),
+                    showsMetrics: false,
+                    knownType: store.exerciseType(for: draft.name),
+                    onDelete: {
+                        drafts.removeAll { $0.id == draft.id }
+                        if drafts.isEmpty {
+                            drafts.append(ExerciseDraft(weightUnit: store.defaultWeightUnit))
+                        }
+                    },
+                    onMoveUp: nil,
+                    onMoveDown: nil
+                )
+                .listRowInsets(EdgeInsets(top: 4, leading: 24, bottom: 4, trailing: 16))
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+                .contentShape(Rectangle())
+                .onLongPressGesture {
+                    editMode = .active
+                }
+            }
+            .onMove { source, destination in
+                drafts.move(fromOffsets: source, toOffset: destination)
+                editMode = .inactive
+            }
+
+            Button {
+                drafts.append(ExerciseDraft(weightUnit: store.defaultWeightUnit))
+            } label: {
+                HStack {
+                    Image(systemName: "plus.circle")
+                    Text("Add Exercise")
+                }
+                .font(.custom("Avenir Next", size: 16))
+                .foregroundStyle(Color("Sand"))
+            }
+            .listRowBackground(Color.clear)
+            .listRowInsets(EdgeInsets(top: 8, leading: 24, bottom: 16, trailing: 16))
+            .buttonStyle(.plain)
+
+            Color.clear
+                .frame(height: 120)
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+        }
+        .listStyle(.plain)
+        .listRowSeparator(.hidden)
+        .scrollContentBackground(.hidden)
+        .environment(\.editMode, $editMode)
     }
 }
 
@@ -3870,23 +4222,39 @@ struct EditTemplateView: View {
                 .scrollContentBackground(.hidden)
                 .environment(\.editMode, $editMode)
 
-                Button {
-                    let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
-                    store.updateTemplate(id: template.id, title: trimmedTitle, exercises: validExercises)
-                    dismiss()
-                } label: {
-                    Text("Save Changes")
-                        .font(.custom("Avenir Next", size: 18))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                        .foregroundStyle(Color("Night"))
-                        .background(Color("Sand"))
-                        .clipShape(Capsule())
-                        .padding(.horizontal, 24)
-                        .padding(.bottom, 12)
+                VStack(spacing: 10) {
+                    Button {
+                        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+                        store.updateTemplate(id: template.id, title: trimmedTitle, exercises: validExercises)
+                        dismiss()
+                    } label: {
+                        Text("Save Changes")
+                            .font(.custom("Avenir Next", size: 18))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .foregroundStyle(Color("Night"))
+                            .background(Color("Sand"))
+                            .clipShape(Capsule())
+                    }
+                    .disabled(!canSave)
+                    .opacity(canSave ? 1 : 0.4)
+
+                    Button {
+                        dismiss()
+                    } label: {
+                        Text("Cancel")
+                            .font(.custom("Avenir Next", size: 18))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .foregroundStyle(Color("Sand"))
+                            .background(
+                                Capsule()
+                                    .stroke(Color("Sand").opacity(0.6), lineWidth: 1)
+                            )
+                    }
                 }
-                .disabled(!canSave)
-                .opacity(canSave ? 1 : 0.4)
+                .padding(.horizontal, 24)
+                .padding(.bottom, 12)
             }
         }
     }
