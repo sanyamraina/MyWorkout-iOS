@@ -41,4 +41,4 @@ Workouts and templates are stored locally in Application Support:
 - More chart filters and comparisons.
 
 ## License
-Add your license here.
+MIT License. See `LICENSE`.

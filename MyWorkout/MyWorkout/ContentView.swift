@@ -9,6 +9,7 @@ import SwiftUI
 import Combine
 import Charts
 import UniformTypeIdentifiers
+import UIKit
 
 enum ExerciseType: String, Codable, CaseIterable {
     case weights
@@ -49,7 +50,14 @@ enum MuscleGroup: String, CaseIterable, Codable {
     case cardio = "Cardio"
 }
 
+enum TemplateShareError: Error {
+    case invalidPayload
+}
+
 enum SessionMergeWindowOption: String, CaseIterable, Codable {
+    case oneMinute
+    case fiveMinutes
+    case tenMinutes
     case threeHours
     case sixHours
     case twelveHours
@@ -58,6 +66,12 @@ enum SessionMergeWindowOption: String, CaseIterable, Codable {
 
     var label: String {
         switch self {
+        case .oneMinute:
+            return "1 minute (test)"
+        case .fiveMinutes:
+            return "5 minutes (test)"
+        case .tenMinutes:
+            return "10 minutes (test)"
         case .threeHours:
             return "3 hours (recommended)"
         case .sixHours:
@@ -73,6 +87,12 @@ enum SessionMergeWindowOption: String, CaseIterable, Codable {
 
     var windowSeconds: TimeInterval? {
         switch self {
+        case .oneMinute:
+            return 60
+        case .fiveMinutes:
+            return 5 * 60
+        case .tenMinutes:
+            return 10 * 60
         case .threeHours:
             return 3 * 60 * 60
         case .sixHours:
@@ -94,6 +114,7 @@ struct WorkoutExercise: Identifiable, Codable, Equatable {
     let sets: [WorkoutSet]
     let durationMinutes: Int?
     let calories: Int?
+    let loggedAt: Date?
 
     init(
         id: UUID,
@@ -101,7 +122,8 @@ struct WorkoutExercise: Identifiable, Codable, Equatable {
         type: ExerciseType = .weights,
         sets: [WorkoutSet],
         durationMinutes: Int? = nil,
-        calories: Int? = nil
+        calories: Int? = nil,
+        loggedAt: Date? = nil
     ) {
         self.id = id
         self.name = name
@@ -109,6 +131,7 @@ struct WorkoutExercise: Identifiable, Codable, Equatable {
         self.sets = sets
         self.durationMinutes = durationMinutes
         self.calories = calories
+        self.loggedAt = loggedAt
     }
 
     init(from decoder: Decoder) throws {
@@ -128,6 +151,7 @@ struct WorkoutExercise: Identifiable, Codable, Equatable {
         }
         durationMinutes = try container.decodeIfPresent(Int.self, forKey: .durationMinutes)
         calories = try container.decodeIfPresent(Int.self, forKey: .calories)
+        loggedAt = try container.decodeIfPresent(Date.self, forKey: .loggedAt)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -138,6 +162,7 @@ struct WorkoutExercise: Identifiable, Codable, Equatable {
         try container.encode(sets, forKey: .sets)
         try container.encodeIfPresent(durationMinutes, forKey: .durationMinutes)
         try container.encodeIfPresent(calories, forKey: .calories)
+        try container.encodeIfPresent(loggedAt, forKey: .loggedAt)
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -149,6 +174,7 @@ struct WorkoutExercise: Identifiable, Codable, Equatable {
         case repsPerSet
         case durationMinutes
         case calories
+        case loggedAt
     }
 }
 
@@ -260,13 +286,15 @@ extension WorkoutSession {
                 switch exercise.type {
                 case .weights:
                     let combinedSets = existing.sets + exercise.sets
+                    let mergedLoggedAt = [existing.loggedAt, exercise.loggedAt].compactMap { $0 }.min()
                     mergedByKey[key] = WorkoutExercise(
                         id: existing.id,
                         name: existing.name,
                         type: existing.type,
                         sets: combinedSets,
                         durationMinutes: nil,
-                        calories: nil
+                        calories: nil,
+                        loggedAt: mergedLoggedAt
                     )
                 case .cardio:
                     let currentMinutes = existing.durationMinutes ?? 0
@@ -275,13 +303,15 @@ extension WorkoutSession {
                     let addCalories = exercise.calories ?? 0
                     let totalMinutes = currentMinutes + addMinutes
                     let totalCalories = currentCalories + addCalories
+                    let mergedLoggedAt = [existing.loggedAt, exercise.loggedAt].compactMap { $0 }.min()
                     mergedByKey[key] = WorkoutExercise(
                         id: existing.id,
                         name: existing.name,
                         type: existing.type,
                         sets: [],
                         durationMinutes: totalMinutes > 0 ? totalMinutes : nil,
-                        calories: totalCalories > 0 ? totalCalories : nil
+                        calories: totalCalories > 0 ? totalCalories : nil,
+                        loggedAt: mergedLoggedAt
                     )
                 }
             } else {
@@ -300,6 +330,11 @@ struct WorkoutTemplate: Identifiable, Codable, Equatable {
     let exercises: [TemplateExercise]
 }
 
+struct TemplateSharePayload: Codable {
+    let version: Int
+    let template: WorkoutTemplate
+}
+
 struct LibraryExercise: Identifiable, Codable, Equatable {
     let id: UUID
     let name: String
@@ -312,6 +347,7 @@ struct WorkoutBackup: Codable {
     let exportedAt: Date
     let sessions: [WorkoutSession]
     let templates: [WorkoutTemplate]
+    let entries: [WorkoutExercise]?
 }
 
 struct BackupDocument: FileDocument {
@@ -333,6 +369,7 @@ struct BackupDocument: FileDocument {
 }
 
 final class WorkoutStore: ObservableObject {
+    @Published private(set) var entries: [WorkoutExercise] = []
     @Published private(set) var sessions: [WorkoutSession] = []
     @Published private(set) var templates: [WorkoutTemplate] = []
     @Published private(set) var exerciseLibrary: [LibraryExercise] = WorkoutStore.defaultLibrary
@@ -352,31 +389,21 @@ final class WorkoutStore: ObservableObject {
     }
 
     func addSession(date: Date, exercises: [WorkoutExercise]) {
-        if let index = closestSessionIndex(to: date) {
-            let existing = sessions[index]
-            let mergedExercises = mergeExercises(existing: existing.exercises, incoming: exercises)
-            let startDate = min(existing.date, date)
-            let endDate = max(existing.endDate, date)
-            let merged = WorkoutSession(
-                id: existing.id,
-                date: startDate,
-                endDate: endDate,
-                exercises: mergedExercises
+        let newEntries = exercises.map { exercise in
+            WorkoutExercise(
+                id: exercise.id,
+                name: exercise.name,
+                type: exercise.type,
+                sets: exercise.sets,
+                durationMinutes: exercise.durationMinutes,
+                calories: exercise.calories,
+                loggedAt: exercise.loggedAt ?? date
             )
-            sessions[index] = merged
-            updateExerciseTypes(from: mergedExercises)
-        } else {
-            let session = WorkoutSession(
-                id: UUID(),
-                date: date,
-                endDate: date,
-                exercises: exercises
-            )
-            sessions.insert(session, at: 0)
-            updateExerciseTypes(from: exercises)
         }
-        sessions.sort { $0.date > $1.date }
-        saveSessions()
+        entries.append(contentsOf: newEntries)
+        updateExerciseTypes(from: exercises)
+        saveEntries()
+        refreshSessions()
     }
 
     private func mergeExercises(existing: [WorkoutExercise], incoming: [WorkoutExercise]) -> [WorkoutExercise] {
@@ -401,7 +428,8 @@ final class WorkoutStore: ObservableObject {
                         type: current.type,
                         sets: combinedSets,
                         durationMinutes: nil,
-                        calories: nil
+                        calories: nil,
+                        loggedAt: mergedLoggedAt(current: current, incoming: exercise)
                     )
                 case .cardio:
                     let currentMinutes = current.durationMinutes ?? 0
@@ -416,7 +444,8 @@ final class WorkoutStore: ObservableObject {
                         type: current.type,
                         sets: [],
                         durationMinutes: totalMinutes > 0 ? totalMinutes : nil,
-                        calories: totalCalories > 0 ? totalCalories : nil
+                        calories: totalCalories > 0 ? totalCalories : nil,
+                        loggedAt: mergedLoggedAt(current: current, incoming: exercise)
                     )
                 }
             } else {
@@ -433,19 +462,37 @@ final class WorkoutStore: ObservableObject {
         return "\(normalized)|\(exercise.type.rawValue)"
     }
 
-    private func closestSessionIndex(to date: Date) -> Int? {
+    private func mergedLoggedAt(current: WorkoutExercise, incoming: WorkoutExercise) -> Date? {
+        [current.loggedAt, incoming.loggedAt].compactMap { $0 }.min()
+    }
+
+    private func closestSessionIndex(
+        for startDate: Date,
+        end endDate: Date,
+        option: SessionMergeWindowOption
+    ) -> Int? {
+        closestSessionIndex(in: sessions, for: startDate, end: endDate, option: option)
+    }
+
+    private func closestSessionIndex(
+        in sessions: [WorkoutSession],
+        for startDate: Date,
+        end endDate: Date,
+        option: SessionMergeWindowOption
+    ) -> Int? {
         var closest: (index: Int, distance: TimeInterval)?
-        let usesSameDay = sessionMergeWindowOption == .sameDay
-        let maxWindow = sessionMergeWindowOption.windowSeconds
+        let maxWindow = option.windowSeconds
         for (index, session) in sessions.enumerated() {
-            if usesSameDay, !Calendar.current.isDate(session.date, inSameDayAs: date) {
+            if option == .sameDay,
+               !Calendar.current.isDate(session.date, inSameDayAs: startDate),
+               !Calendar.current.isDate(session.date, inSameDayAs: endDate) {
                 continue
             }
             let distance: TimeInterval
-            if date < session.date {
-                distance = session.date.timeIntervalSince(date)
-            } else if date > session.endDate {
-                distance = date.timeIntervalSince(session.endDate)
+            if startDate > session.endDate {
+                distance = startDate.timeIntervalSince(session.endDate)
+            } else if endDate < session.date {
+                distance = session.date.timeIntervalSince(endDate)
             } else {
                 distance = 0
             }
@@ -463,18 +510,110 @@ final class WorkoutStore: ObservableObject {
         return closest?.index
     }
 
-    func updateSession(id: UUID, date: Date, exercises: [WorkoutExercise]) {
-        guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
-        let mergedExercises = mergeExercises(existing: [], incoming: exercises)
-        sessions[index] = WorkoutSession(id: id, date: date, endDate: date, exercises: mergedExercises)
+    func needsRebuild(for option: SessionMergeWindowOption) -> Bool {
+        sessionSignatures(rebuiltSessions(using: option, entries: entries)) != sessionSignatures(sessions)
+    }
+
+    func rebuildSessions(using option: SessionMergeWindowOption? = nil) {
+        let option = option ?? sessionMergeWindowOption
+        sessions = rebuiltSessions(using: option, entries: entries)
         sessions.sort { $0.date > $1.date }
-        updateExerciseTypes(from: mergedExercises)
-        saveSessions()
+        updateExerciseTypes(from: sessions.flatMap { $0.exercises })
+    }
+
+    private func rebuiltSessions(using option: SessionMergeWindowOption, entries: [WorkoutExercise]) -> [WorkoutSession] {
+        var rebuilt: [WorkoutSession] = []
+        let orderedExercises = entries
+            .map { exercise in
+                let loggedAt = exercise.loggedAt ?? Date.distantPast
+                return (loggedAt, exercise)
+            }
+            .sorted { $0.0 < $1.0 }
+        for (loggedAt, exercise) in orderedExercises {
+            let normalized = normalizedExercise(exercise, loggedAt: loggedAt)
+            if let index = closestSessionIndex(in: rebuilt, for: loggedAt, end: loggedAt, option: option) {
+                let existing = rebuilt[index]
+                let mergedExercises = existing.exercises + [normalized]
+                let startDate = min(existing.date, loggedAt)
+                let endDate = max(existing.endDate, loggedAt)
+                rebuilt[index] = WorkoutSession(
+                    id: existing.id,
+                    date: startDate,
+                    endDate: endDate,
+                    exercises: mergedExercises
+                )
+            } else {
+                rebuilt.append(
+                    WorkoutSession(
+                        id: UUID(),
+                        date: loggedAt,
+                        endDate: loggedAt,
+                        exercises: [normalized]
+                    )
+                )
+            }
+        }
+        return rebuilt
+    }
+
+    private struct SessionSignature: Equatable {
+        let startDate: Date
+        let endDate: Date
+        let exerciseIds: [UUID]
+    }
+
+    private func sessionSignatures(_ sessions: [WorkoutSession]) -> [SessionSignature] {
+        sessions
+            .map { session in
+                let ids = session.exercises.map(\.id).sorted { $0.uuidString < $1.uuidString }
+                return SessionSignature(startDate: session.date, endDate: session.endDate, exerciseIds: ids)
+            }
+            .sorted {
+                if $0.startDate != $1.startDate { return $0.startDate < $1.startDate }
+                if $0.endDate != $1.endDate { return $0.endDate < $1.endDate }
+                let left = $0.exerciseIds.first?.uuidString ?? ""
+                let right = $1.exerciseIds.first?.uuidString ?? ""
+                return left < right
+            }
+    }
+
+    private func normalizedExercise(_ exercise: WorkoutExercise, loggedAt: Date) -> WorkoutExercise {
+        WorkoutExercise(
+            id: exercise.id,
+            name: exercise.name,
+            type: exercise.type,
+            sets: exercise.sets,
+            durationMinutes: exercise.durationMinutes,
+            calories: exercise.calories,
+            loggedAt: loggedAt
+        )
+    }
+
+    func updateSession(_ session: WorkoutSession, date: Date, exercises: [WorkoutExercise]) {
+        let removeIds = Set(session.exercises.map(\.id))
+        entries.removeAll { removeIds.contains($0.id) }
+        let newEntries = exercises.map { exercise in
+            WorkoutExercise(
+                id: exercise.id,
+                name: exercise.name,
+                type: exercise.type,
+                sets: exercise.sets,
+                durationMinutes: exercise.durationMinutes,
+                calories: exercise.calories,
+                loggedAt: exercise.loggedAt ?? date
+            )
+        }
+        entries.append(contentsOf: newEntries)
+        updateExerciseTypes(from: exercises)
+        saveEntries()
+        refreshSessions()
     }
 
     func removeSession(_ session: WorkoutSession) {
-        sessions.removeAll { $0.id == session.id }
-        saveSessions()
+        let removeIds = Set(session.exercises.map(\.id))
+        entries.removeAll { removeIds.contains($0.id) }
+        saveEntries()
+        refreshSessions()
     }
 
     func addTemplate(title: String, exercises: [TemplateExercise]) {
@@ -486,6 +625,24 @@ final class WorkoutStore: ObservableObject {
         templates.insert(template, at: 0)
         updateExerciseTypes(from: exercises)
         saveTemplates()
+    }
+
+    func shareString(for template: WorkoutTemplate) throws -> String {
+        let payload = TemplateSharePayload(version: 1, template: template)
+        let data = try JSONEncoder().encode(payload)
+        return data.base64EncodedString()
+    }
+
+    func importTemplate(from shareString: String) throws {
+        let cleaned = shareString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let data = Data(base64Encoded: cleaned) else {
+            throw TemplateShareError.invalidPayload
+        }
+        let payload = try JSONDecoder().decode(TemplateSharePayload.self, from: data)
+        let exercises = payload.template.exercises.map {
+            TemplateExercise(id: UUID(), name: $0.name, type: $0.type, weightKg: nil, sets: nil, repsPerSet: nil)
+        }
+        addTemplate(title: payload.template.title, exercises: exercises)
     }
 
     func updateTemplate(id: UUID, title: String, exercises: [TemplateExercise]) {
@@ -532,15 +689,21 @@ final class WorkoutStore: ObservableObject {
                         type: .cardio,
                         sets: [],
                         weightUnit: defaultWeightUnit,
-                        durationMinutes: duration,
-                        calories: calories
+                        durationMinutes: "",
+                        calories: "",
+                        durationPlaceholder: duration,
+                        caloriesPlaceholder: calories
                     )
                 case .weights:
                     if latest.exercise.type == .weights {
-                        let setDrafts = latest.exercise.sets.map {
+                        let setDrafts = latest.exercise.sets.map { set in
                             WorkoutSetDraft(
-                                weight: $0.weightKg == 0 ? "" : String(format: "%.1f", weightValue($0.weightKg, unit: defaultWeightUnit)),
-                                reps: "\($0.reps)"
+                                weight: "",
+                                reps: "",
+                                weightPlaceholder: set.weightKg == 0
+                                    ? ""
+                                    : String(format: "%.1f", weightValue(set.weightKg, unit: defaultWeightUnit)),
+                                repsPlaceholder: "\(set.reps)"
                             )
                         }
                         let isBodyweight = latest.exercise.sets.allSatisfy { $0.weightKg == 0 }
@@ -570,15 +733,17 @@ final class WorkoutStore: ObservableObject {
 
         var latest: (date: Date, exercise: WorkoutExercise)?
         for session in sessions {
-            for exercise in session.mergedExercises() {
+            for exercise in session.exercises {
                 let exerciseKey = exercise.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
                 guard exerciseKey == key else { continue }
                 if let current = latest {
-                    if session.date >= current.date {
-                        latest = (session.date, exercise)
+                    let exerciseDate = exercise.loggedAt ?? session.date
+                    if exerciseDate >= current.date {
+                        latest = (exerciseDate, exercise)
                     }
                 } else {
-                    latest = (session.date, exercise)
+                    let exerciseDate = exercise.loggedAt ?? session.date
+                    latest = (exerciseDate, exercise)
                 }
             }
         }
@@ -600,21 +765,39 @@ final class WorkoutStore: ObservableObject {
 
     func exportBackup() -> WorkoutBackup {
         WorkoutBackup(
-            version: 1,
+            version: 2,
             exportedAt: Date(),
             sessions: sessions,
-            templates: templates
+            templates: templates,
+            entries: entries
         )
     }
 
     func importBackup(_ backup: WorkoutBackup) {
-        sessions = backup.sessions.sorted { $0.date > $1.date }
+        if let entries = backup.entries {
+            self.entries = entries
+        } else {
+            self.entries = backup.sessions.flatMap { session in
+                session.exercises.map { exercise in
+                    WorkoutExercise(
+                        id: exercise.id,
+                        name: exercise.name,
+                        type: exercise.type,
+                        sets: exercise.sets,
+                        durationMinutes: exercise.durationMinutes,
+                        calories: exercise.calories,
+                        loggedAt: exercise.loggedAt ?? session.date
+                    )
+                }
+            }
+        }
         templates = backup.templates
         exerciseTypeMap = [:]
-        updateExerciseTypes(from: sessions.flatMap { $0.exercises })
+        updateExerciseTypes(from: self.entries)
         updateExerciseTypes(from: templates.flatMap { $0.exercises })
-        saveSessions()
+        saveEntries()
         saveTemplates()
+        refreshSessions()
     }
 
     func exportBackupData() throws -> Data {
@@ -628,14 +811,15 @@ final class WorkoutStore: ObservableObject {
     }
 
     func resetAllData() {
+        entries = []
         sessions = []
         templates = []
         exerciseTypeMap = [:]
-        saveSessions()
+        saveEntries()
         saveTemplates()
         saveExerciseTypes()
 
-        let urls = [sessionsFileURL(), templatesFileURL(), exerciseTypesFileURL()]
+        let urls = [sessionsFileURL(), entriesFileURL(), templatesFileURL(), exerciseTypesFileURL()]
         for url in urls {
             try? FileManager.default.removeItem(at: url)
         }
@@ -654,15 +838,35 @@ final class WorkoutStore: ObservableObject {
     }
 
     private func load() {
-        sessions = loadSessions()
+        entries = loadEntries()
+        let needsEntryMigration = entries.isEmpty
+        if needsEntryMigration {
+            let legacySessions = loadSessions()
+            entries = legacySessions.flatMap { session in
+                session.exercises.map { exercise in
+                    WorkoutExercise(
+                        id: exercise.id,
+                        name: exercise.name,
+                        type: exercise.type,
+                        sets: exercise.sets,
+                        durationMinutes: exercise.durationMinutes,
+                        calories: exercise.calories,
+                        loggedAt: exercise.loggedAt ?? session.date
+                    )
+                }
+            }
+        }
         templates = loadTemplates()
         exerciseTypeMap = loadExerciseTypes()
         hasLoaded = true
-        let sessionExercises = sessions.flatMap { $0.exercises }
-        updateExerciseTypes(from: sessionExercises)
+        updateExerciseTypes(from: entries)
         let templateExercises = templates.flatMap { $0.exercises }
         updateExerciseTypes(from: templateExercises)
         updateExerciseTypes(from: exerciseLibrary)
+        refreshSessions()
+        if needsEntryMigration {
+            saveEntries()
+        }
     }
 
     func exerciseType(for name: String) -> ExerciseType? {
@@ -873,7 +1077,8 @@ final class WorkoutStore: ObservableObject {
                                     WorkoutSet(id: UUID(), weightKg: entry.weightKg, reps: entry.repsPerSet)
                                 },
                                 durationMinutes: nil,
-                                calories: nil
+                                calories: nil,
+                                loggedAt: entry.date
                             )
                         ]
                     )
@@ -882,6 +1087,20 @@ final class WorkoutStore: ObservableObject {
                 return []
             }
         }
+    }
+
+    private func loadEntries() -> [WorkoutExercise] {
+        do {
+            let data = try Data(contentsOf: entriesFileURL())
+            return try JSONDecoder().decode([WorkoutExercise].self, from: data)
+        } catch {
+            return []
+        }
+    }
+
+    private func refreshSessions() {
+        sessions = rebuiltSessions(using: sessionMergeWindowOption, entries: entries)
+        sessions.sort { $0.date > $1.date }
     }
 
     private func loadTemplates() -> [WorkoutTemplate] {
@@ -914,11 +1133,11 @@ final class WorkoutStore: ObservableObject {
         }
     }
 
-    private func saveSessions() {
+    private func saveEntries() {
         guard hasLoaded else { return }
         do {
-            let data = try JSONEncoder().encode(sessions)
-            let url = sessionsFileURL()
+            let data = try JSONEncoder().encode(entries)
+            let url = entriesFileURL()
             try FileManager.default.createDirectory(
                 at: url.deletingLastPathComponent(),
                 withIntermediateDirectories: true,
@@ -949,6 +1168,11 @@ final class WorkoutStore: ObservableObject {
     private func sessionsFileURL() -> URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         return base.appendingPathComponent("MyWorkout/workouts.json")
+    }
+
+    private func entriesFileURL() -> URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        return base.appendingPathComponent("MyWorkout/entries.json")
     }
 
     private func templatesFileURL() -> URL {
@@ -1019,6 +1243,12 @@ struct HomeView: View {
     @State private var editingTemplate: WorkoutTemplate?
     @State private var editingSession: WorkoutSession?
     @State private var draftFromTemplate: WorkoutTemplate?
+    @State private var showTemplateImport = false
+    @State private var templateImportText = ""
+    @State private var showTemplateImportError = false
+    @State private var templateImportErrorMessage = ""
+    @State private var showTemplateShareNotice = false
+    @State private var showTemplateImportSuccess = false
 
     var body: some View {
         ZStack {
@@ -1058,8 +1288,11 @@ struct HomeView: View {
         .safeAreaInset(edge: .bottom) {
             addButton
         }
-        .sheet(isPresented: $showingAdd, onDismiss: { draftFromTemplate = nil }) {
-            AddWorkoutView(store: store, template: draftFromTemplate, session: nil)
+        .sheet(isPresented: $showingAdd) {
+            AddWorkoutView(store: store, template: nil, session: nil)
+        }
+        .sheet(item: $draftFromTemplate) { template in
+            AddWorkoutView(store: store, template: template, session: nil)
         }
         .sheet(item: $editingSession) { session in
             AddWorkoutView(store: store, template: nil, session: session)
@@ -1069,6 +1302,38 @@ struct HomeView: View {
         }
         .sheet(item: $editingTemplate) { template in
             EditTemplateView(store: store, template: template)
+        }
+        .alert("Import Template", isPresented: $showTemplateImport) {
+            TextField("Paste template code", text: $templateImportText)
+                .textInputAutocapitalization(.never)
+            Button("Cancel", role: .cancel) {}
+            Button("Import") {
+                do {
+                    try store.importTemplate(from: templateImportText)
+                    templateImportText = ""
+                    showTemplateImportSuccess = true
+                } catch {
+                    templateImportErrorMessage = "Invalid template code."
+                    showTemplateImportError = true
+                }
+            }
+        } message: {
+            Text("Paste a template code to import it.")
+        }
+        .alert("Import Failed", isPresented: $showTemplateImportError) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(templateImportErrorMessage)
+        }
+        .alert("Template Ready to Share", isPresented: $showTemplateShareNotice) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Template code copied to the clipboard.")
+        }
+        .alert("Template Imported", isPresented: $showTemplateImportSuccess) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Template added to your list.")
         }
     }
 
@@ -1110,8 +1375,18 @@ struct HomeView: View {
                     .fontWeight(.semibold)
                     .foregroundStyle(Color("Sand"))
                 Spacer()
-                Button {
-                    showingTemplateAdd = true
+                Menu {
+                    Button {
+                        showingTemplateAdd = true
+                    } label: {
+                        Label("New Template", systemImage: "plus")
+                    }
+                    Button {
+                        templateImportText = ""
+                        showTemplateImport = true
+                    } label: {
+                        Label("Import Template", systemImage: "square.and.arrow.down")
+                    }
                 } label: {
                     Image(systemName: "plus")
                         .font(.custom("Avenir Next", size: 16))
@@ -1131,7 +1406,16 @@ struct HomeView: View {
                                 template: template,
                                 onUse: {
                                     draftFromTemplate = template
-                                    showingAdd = true
+                                },
+                                onShare: {
+                                    do {
+                                        let code = try store.shareString(for: template)
+                                        UIPasteboard.general.string = code
+                                        showTemplateShareNotice = true
+                                    } catch {
+                                        templateImportErrorMessage = "Unable to share template."
+                                        showTemplateImportError = true
+                                    }
                                 },
                                 onEdit: {
                                     editingTemplate = template
@@ -1191,7 +1475,6 @@ struct HomeView: View {
                 )
             ]
         )
-        showingAdd = true
     }
 
     private func recentWorkoutExercises(limit: Int) -> [String] {
@@ -1313,6 +1596,12 @@ struct HistoryView: View {
                                 }
             }
         }
+        .onChange(of: store.sessions) { _, newSessions in
+            let validIds = Set(newSessions.map { $0.id })
+            if path.contains(where: { !validIds.contains($0) }) {
+                path = path.filter { validIds.contains($0) }
+            }
+        }
         .sheet(item: $editingSession) { session in
             AddWorkoutView(store: store, template: nil, session: session)
         }
@@ -1341,6 +1630,10 @@ struct SettingsView: View {
     @State private var importErrorMessage: String?
     @State private var showImportError = false
     @State private var showResetConfirm = false
+    @State private var showRebuildConfirm = false
+    @State private var sessionWindowSelection: SessionMergeWindowOption = .threeHours
+    @State private var pendingSessionWindow: SessionMergeWindowOption?
+    @State private var isSettingUp = true
 
     var body: some View {
         ZStack {
@@ -1394,6 +1687,27 @@ struct SettingsView: View {
         } message: {
             Text("This will permanently delete all workouts, templates, and exercise types on this device.")
         }
+        .alert("Update History Sessions?", isPresented: $showRebuildConfirm) {
+            Button("Keep Current", role: .cancel) {
+                sessionWindowSelection = store.sessionMergeWindowOption
+                pendingSessionWindow = nil
+            }
+            Button("Rebuild History", role: .destructive) {
+                if let pendingSessionWindow {
+                    store.sessionMergeWindowOption = pendingSessionWindow
+                    store.rebuildSessions()
+                }
+                pendingSessionWindow = nil
+            }
+        } message: {
+            Text("Changing the session window can regroup past workouts. Rebuild history to apply the new window?")
+        }
+        .onAppear {
+            sessionWindowSelection = store.sessionMergeWindowOption
+            DispatchQueue.main.async {
+                isSettingUp = false
+            }
+        }
     }
 
     private var preferencesCard: some View {
@@ -1409,13 +1723,23 @@ struct SettingsView: View {
                 Text("Workouts logged within this window merge into the same session.")
                     .font(.custom("Avenir Next", size: 12))
                     .foregroundStyle(Color("Sand").opacity(0.6))
-                Picker("Session Window", selection: $store.sessionMergeWindowOption) {
+                Picker("Session Window", selection: $sessionWindowSelection) {
                     ForEach(SessionMergeWindowOption.allCases, id: \.self) { option in
                         Text(option.label).tag(option)
                     }
                 }
                 .pickerStyle(.menu)
                 .tint(Color("Sand"))
+                .onChange(of: sessionWindowSelection) { _, newValue in
+                    guard !isSettingUp else { return }
+                    guard newValue != store.sessionMergeWindowOption else { return }
+                    if store.needsRebuild(for: newValue) {
+                        pendingSessionWindow = newValue
+                        showRebuildConfirm = true
+                    } else {
+                        store.sessionMergeWindowOption = newValue
+                    }
+                }
             }
 
             Divider()
@@ -1464,9 +1788,6 @@ struct SettingsView: View {
             } label: {
                 settingsRow(title: "Import Backup", systemImage: "square.and.arrow.down")
             }
-
-            Divider()
-                .overlay(Color("Sand").opacity(0.12))
 
             Button(role: .destructive) {
                 showResetConfirm = true
@@ -2070,6 +2391,8 @@ struct ExerciseDraft: Identifiable, Equatable {
     var weightUnit: WeightUnit
     var durationMinutes: String
     var calories: String
+    var durationPlaceholder: String
+    var caloriesPlaceholder: String
 
     init(
         id: UUID = UUID(),
@@ -2079,7 +2402,9 @@ struct ExerciseDraft: Identifiable, Equatable {
         isBodyweight: Bool = false,
         weightUnit: WeightUnit = .kg,
         durationMinutes: String = "",
-        calories: String = ""
+        calories: String = "",
+        durationPlaceholder: String = "",
+        caloriesPlaceholder: String = ""
     ) {
         self.id = id
         self.name = name
@@ -2089,6 +2414,8 @@ struct ExerciseDraft: Identifiable, Equatable {
         self.weightUnit = weightUnit
         self.durationMinutes = durationMinutes
         self.calories = calories
+        self.durationPlaceholder = durationPlaceholder
+        self.caloriesPlaceholder = caloriesPlaceholder
     }
 }
 
@@ -2096,11 +2423,21 @@ struct WorkoutSetDraft: Identifiable, Equatable {
     let id: UUID
     var weight: String
     var reps: String
+    var weightPlaceholder: String
+    var repsPlaceholder: String
 
-    init(id: UUID = UUID(), weight: String = "", reps: String = "") {
+    init(
+        id: UUID = UUID(),
+        weight: String = "",
+        reps: String = "",
+        weightPlaceholder: String = "",
+        repsPlaceholder: String = ""
+    ) {
         self.id = id
         self.weight = weight
         self.reps = reps
+        self.weightPlaceholder = weightPlaceholder
+        self.repsPlaceholder = repsPlaceholder
     }
 }
 
@@ -2200,7 +2537,8 @@ struct AddWorkoutView: View {
                         type: .weights,
                         sets: setModels,
                         durationMinutes: nil,
-                        calories: nil
+                        calories: nil,
+                        loggedAt: workoutDate
                     )
                 )
             case .cardio:
@@ -2234,7 +2572,8 @@ struct AddWorkoutView: View {
                         type: .cardio,
                         sets: [],
                         durationMinutes: durationValue,
-                        calories: caloriesValue
+                        calories: caloriesValue,
+                        loggedAt: workoutDate
                     )
                 )
             }
@@ -2308,7 +2647,7 @@ struct AddWorkoutView: View {
 
                 Button {
                     if let session {
-                        store.updateSession(id: session.id, date: workoutDate, exercises: validExercises)
+                        store.updateSession(session, date: workoutDate, exercises: validExercises)
                     } else {
                         store.addSession(date: workoutDate, exercises: validExercises)
                     }
@@ -2433,6 +2772,7 @@ struct ExerciseEditorRow: View {
     let onMoveUp: (() -> Void)?
     let onMoveDown: (() -> Void)?
     @State private var lastUnit: WeightUnit = .kg
+    @State private var isNameFocused = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -2476,7 +2816,8 @@ struct ExerciseEditorRow: View {
                 title: "Exercise",
                 showsTitle: false,
                 text: $draft.name,
-                suggestions: suggestions
+                suggestions: suggestions,
+                onFocusChange: { isNameFocused = $0 }
             )
             .zIndex(2)
 
@@ -2485,9 +2826,19 @@ struct ExerciseEditorRow: View {
                     ForEach($draft.sets) { $set in
                         let setId = $set.wrappedValue.id
                         HStack(alignment: .center, spacing: 12) {
-                            InputCard(title: "Reps", text: $set.reps, placeholder: "10", keyboard: .numberPad)
+                            InputCard(
+                                title: "Reps",
+                                text: $set.reps,
+                                placeholder: set.repsPlaceholder.isEmpty ? "10" : set.repsPlaceholder,
+                                keyboard: .numberPad
+                            )
                             if !draft.isBodyweight {
-                                InputCard(title: "Weight", text: $set.weight, placeholder: "10", keyboard: .decimalPad)
+                                InputCard(
+                                    title: "Weight",
+                                    text: $set.weight,
+                                    placeholder: set.weightPlaceholder.isEmpty ? "10" : set.weightPlaceholder,
+                                    keyboard: .decimalPad
+                                )
                                 UnitPillAligned(unit: $draft.weightUnit)
                             }
                             if draft.sets.count > 1 {
@@ -2524,8 +2875,18 @@ struct ExerciseEditorRow: View {
                     .buttonStyle(.plain)
                 } else {
                     HStack(spacing: 12) {
-                        InputCard(title: "Time (min)", text: $draft.durationMinutes, placeholder: "20", keyboard: .numberPad)
-                        InputCard(title: "Calories", text: $draft.calories, placeholder: "150", keyboard: .numberPad)
+                        InputCard(
+                            title: "Time (min)",
+                            text: $draft.durationMinutes,
+                            placeholder: draft.durationPlaceholder.isEmpty ? "20" : draft.durationPlaceholder,
+                            keyboard: .numberPad
+                        )
+                        InputCard(
+                            title: "Calories",
+                            text: $draft.calories,
+                            placeholder: draft.caloriesPlaceholder.isEmpty ? "150" : draft.caloriesPlaceholder,
+                            keyboard: .numberPad
+                        )
                     }
                 }
             }
@@ -2535,6 +2896,7 @@ struct ExerciseEditorRow: View {
             RoundedRectangle(cornerRadius: 14)
                 .fill(Color("Card"))
         )
+        .zIndex(isNameFocused ? 5 : 1)
         .onAppear {
             lastUnit = draft.weightUnit
             if let knownType {
@@ -2549,7 +2911,13 @@ struct ExerciseEditorRow: View {
         .onChange(of: draft.isBodyweight) { _, isBodyweight in
             if isBodyweight {
                 draft.sets = draft.sets.map { set in
-                    WorkoutSetDraft(id: set.id, weight: "", reps: set.reps)
+                    WorkoutSetDraft(
+                        id: set.id,
+                        weight: "",
+                        reps: set.reps,
+                        weightPlaceholder: "",
+                        repsPlaceholder: set.repsPlaceholder
+                    )
                 }
             }
         }
@@ -2609,10 +2977,14 @@ struct ExerciseEditorRow: View {
         draft.sets = draft.sets.map { set in
             let value = Double(set.weight) ?? 0
             let converted = roundToHalf(value * multiplier)
+            let placeholderValue = Double(set.weightPlaceholder) ?? 0
+            let convertedPlaceholder = roundToHalf(placeholderValue * multiplier)
             return WorkoutSetDraft(
                 id: set.id,
                 weight: value == 0 ? "" : String(format: "%.1f", converted),
-                reps: set.reps
+                reps: set.reps,
+                weightPlaceholder: placeholderValue == 0 ? set.weightPlaceholder : String(format: "%.1f", convertedPlaceholder),
+                repsPlaceholder: set.repsPlaceholder
             )
         }
     }
@@ -2769,32 +3141,6 @@ struct SessionDetailView: View {
                         .fontWeight(.semibold)
                         .foregroundStyle(Color("Sand"))
 
-                    HStack(spacing: 12) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Start")
-                                .font(.custom("Avenir Next", size: 12))
-                                .foregroundStyle(Color("Sand").opacity(0.6))
-                            Text(session.date.formatted(date: .abbreviated, time: .shortened))
-                                .font(.custom("Avenir Next", size: 14))
-                                .foregroundStyle(Color("Sand"))
-                        }
-                        Spacer()
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("End")
-                                .font(.custom("Avenir Next", size: 12))
-                                .foregroundStyle(Color("Sand").opacity(0.6))
-                            Text(session.endDate.formatted(date: .abbreviated, time: .shortened))
-                                .font(.custom("Avenir Next", size: 14))
-                                .foregroundStyle(Color("Sand"))
-                        }
-                    }
-                    .padding(12)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(
-                        RoundedRectangle(cornerRadius: 16)
-                            .fill(Color("Card").opacity(0.85))
-                    )
-
                     ForEach(session.mergedExercises()) { exercise in
                         ExerciseDetailCard(exercise: exercise)
                     }
@@ -2917,6 +3263,7 @@ struct ExerciseNameField: View {
     let showsTitle: Bool
     @Binding var text: String
     let suggestions: [String]
+    let onFocusChange: ((Bool) -> Void)?
     @FocusState private var isFocused: Bool
 
     private var matches: [String] {
@@ -2988,6 +3335,9 @@ struct ExerciseNameField: View {
                 }
             }
             .zIndex(3)
+        }
+        .onChange(of: isFocused) { _, newValue in
+            onFocusChange?(newValue)
         }
     }
 }
@@ -3231,6 +3581,7 @@ struct EmptyStateView: View {
 struct TemplateCard: View {
     let template: WorkoutTemplate
     let onUse: () -> Void
+    let onShare: () -> Void
     let onEdit: () -> Void
     let onDelete: () -> Void
 
@@ -3259,6 +3610,11 @@ struct TemplateCard: View {
         }
         .contextMenu {
             Button {
+                onShare()
+            } label: {
+                Label("Share", systemImage: "square.and.arrow.up")
+            }
+            Button {
                 onEdit()
             } label: {
                 Label("Edit", systemImage: "pencil")
@@ -3278,6 +3634,7 @@ struct AddTemplateView: View {
 
     @State private var title = ""
     @State private var drafts: [ExerciseDraft] = [ExerciseDraft()]
+    @State private var editMode: EditMode = .inactive
 
     private var validExercises: [TemplateExercise] {
         drafts.compactMap { draft in
@@ -3310,45 +3667,72 @@ struct AddTemplateView: View {
             .ignoresSafeArea()
 
             VStack(spacing: 0) {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 16) {
-                        Text("New Template")
-                            .font(.custom("Avenir Next", size: 28))
-                            .fontWeight(.semibold)
-                            .foregroundStyle(Color("Sand"))
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("New Template")
+                        .font(.custom("Avenir Next", size: 28))
+                        .fontWeight(.semibold)
+                        .foregroundStyle(Color("Sand"))
+                        .padding(.horizontal, 24)
+                        .padding(.top, 24)
 
-                        InputCard(title: "Template Name", text: $title, placeholder: "Push Day", keyboard: .default)
+                    InputCard(title: "Template Name", text: $title, placeholder: "Push Day", keyboard: .default)
+                        .padding(.leading, 24)
+                        .padding(.trailing, 16)
+                        .padding(.bottom, 12)
+                }
 
-                        ForEach($drafts) { $draft in
-                            ExerciseEditorRow(
-                                draft: $draft,
-                                suggestions: store.exerciseNameCatalog(),
-                                showsMetrics: false,
-                                knownType: store.exerciseType(for: draft.name),
-                                onDelete: {
-                                    drafts.removeAll { $0.id == draft.id }
-                                    if drafts.isEmpty {
-                                        drafts.append(ExerciseDraft(weightUnit: store.defaultWeightUnit))
-                                    }
-                                },
-                                onMoveUp: nil,
-                                onMoveDown: nil
-                            )
-                        }
-
-                        Button {
-                            drafts.append(ExerciseDraft(weightUnit: store.defaultWeightUnit))
-                        } label: {
-                            HStack {
-                                Image(systemName: "plus.circle")
-                                Text("Add Exercise")
-                            }
-                            .font(.custom("Avenir Next", size: 16))
-                            .foregroundStyle(Color("Sand"))
+                List {
+                    ForEach($drafts) { $draft in
+                        ExerciseEditorRow(
+                            draft: $draft,
+                            suggestions: store.exerciseNameCatalog(),
+                            showsMetrics: false,
+                            knownType: store.exerciseType(for: draft.name),
+                            onDelete: {
+                                drafts.removeAll { $0.id == draft.id }
+                                if drafts.isEmpty {
+                                    drafts.append(ExerciseDraft(weightUnit: store.defaultWeightUnit))
+                                }
+                            },
+                            onMoveUp: nil,
+                            onMoveDown: nil
+                        )
+                        .listRowInsets(EdgeInsets(top: 4, leading: 24, bottom: 4, trailing: 16))
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .contentShape(Rectangle())
+                        .onLongPressGesture {
+                            editMode = .active
                         }
                     }
-                    .padding(24)
+                    .onMove { source, destination in
+                        drafts.move(fromOffsets: source, toOffset: destination)
+                        editMode = .inactive
+                    }
+
+                    Button {
+                        drafts.append(ExerciseDraft(weightUnit: store.defaultWeightUnit))
+                    } label: {
+                        HStack {
+                            Image(systemName: "plus.circle")
+                            Text("Add Exercise")
+                        }
+                        .font(.custom("Avenir Next", size: 16))
+                        .foregroundStyle(Color("Sand"))
+                    }
+                    .listRowBackground(Color.clear)
+                    .listRowInsets(EdgeInsets(top: 8, leading: 24, bottom: 16, trailing: 16))
+                    .buttonStyle(.plain)
+
+                    Color.clear
+                        .frame(height: 120)
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
                 }
+                .listStyle(.plain)
+                .listRowSeparator(.hidden)
+                .scrollContentBackground(.hidden)
+                .environment(\.editMode, $editMode)
 
                 Button {
                     let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -3379,7 +3763,7 @@ struct EditTemplateView: View {
 
     @State private var title: String
     @State private var drafts: [ExerciseDraft]
-    @State private var editMode: EditMode = .active
+    @State private var editMode: EditMode = .inactive
 
     init(store: WorkoutStore, template: WorkoutTemplate) {
         self.store = store
@@ -3423,20 +3807,14 @@ struct EditTemplateView: View {
                             .font(.custom("Avenir Next", size: 28))
                             .fontWeight(.semibold)
                             .foregroundStyle(Color("Sand"))
-                        Spacer()
-                        Button {
-                            editMode = (editMode == .active) ? .inactive : .active
-                        } label: {
-                            Text(editMode == .active ? "Done" : "Reorder")
-                                .font(.custom("Avenir Next", size: 14))
-                                .foregroundStyle(Color("Sand"))
-                        }
                     }
                     .padding(.horizontal, 24)
                     .padding(.top, 24)
 
                     InputCard(title: "Template Name", text: $title, placeholder: "Push Day", keyboard: .default)
-                        .padding(.horizontal, 24)
+                        .padding(.leading, 24)
+                        .padding(.trailing, 16)
+                        .padding(.bottom, 12)
                 }
 
                 List {
@@ -3455,11 +3833,17 @@ struct EditTemplateView: View {
                             onMoveUp: nil,
                             onMoveDown: nil
                         )
-                        .listRowInsets(EdgeInsets(top: 8, leading: 24, bottom: 8, trailing: 24))
-                        .listRowBackground(Color("Night"))
+                        .listRowInsets(EdgeInsets(top: 4, leading: 24, bottom: 4, trailing: 16))
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .contentShape(Rectangle())
+                        .onLongPressGesture {
+                            editMode = .active
+                        }
                     }
                     .onMove { source, destination in
                         drafts.move(fromOffsets: source, toOffset: destination)
+                        editMode = .inactive
                     }
 
                     Button {
@@ -3472,9 +3856,17 @@ struct EditTemplateView: View {
                         .font(.custom("Avenir Next", size: 16))
                         .foregroundStyle(Color("Sand"))
                     }
-                    .listRowBackground(Color("Night"))
+                    .listRowBackground(Color.clear)
+                    .listRowInsets(EdgeInsets(top: 8, leading: 24, bottom: 16, trailing: 16))
+                    .buttonStyle(.plain)
+
+                    Color.clear
+                        .frame(height: 120)
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
                 }
                 .listStyle(.plain)
+                .listRowSeparator(.hidden)
                 .scrollContentBackground(.hidden)
                 .environment(\.editMode, $editMode)
 
