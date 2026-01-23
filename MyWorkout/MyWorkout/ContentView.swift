@@ -41,6 +41,28 @@ enum WeightUnit: String, Codable, CaseIterable {
     }
 }
 
+private func formattedDurationValue(_ seconds: Int?) -> String {
+    guard let seconds, seconds > 0 else { return "" }
+    let minutes = seconds / 60
+    let remainder = seconds % 60
+    return String(format: "%d:%02d", minutes, remainder)
+}
+
+private func durationLabel(_ seconds: Int) -> String {
+    let minutes = seconds / 60
+    let remainder = seconds % 60
+    if remainder == 0 {
+        return "\(minutes) min"
+    }
+    return String(format: "%d:%02d", minutes, remainder)
+}
+
+private func formattedWeight(_ kg: Double, unit: WeightUnit) -> String {
+    if kg == 0 { return "Bodyweight" }
+    let value = unit == .lb ? kg * 2.20462262 : kg
+    return String(format: "%.1f %@", value, unit.label)
+}
+
 enum MuscleGroup: String, CaseIterable, Codable {
     case chest = "Chest"
     case back = "Back"
@@ -114,7 +136,7 @@ struct WorkoutExercise: Identifiable, Codable, Equatable {
     let name: String
     let type: ExerciseType
     let sets: [WorkoutSet]
-    let durationMinutes: Int?
+    let durationSeconds: Int?
     let calories: Int?
     let loggedAt: Date?
 
@@ -123,7 +145,7 @@ struct WorkoutExercise: Identifiable, Codable, Equatable {
         name: String,
         type: ExerciseType = .weights,
         sets: [WorkoutSet],
-        durationMinutes: Int? = nil,
+        durationSeconds: Int? = nil,
         calories: Int? = nil,
         loggedAt: Date? = nil
     ) {
@@ -131,7 +153,7 @@ struct WorkoutExercise: Identifiable, Codable, Equatable {
         self.name = name
         self.type = type
         self.sets = sets
-        self.durationMinutes = durationMinutes
+        self.durationSeconds = durationSeconds
         self.calories = calories
         self.loggedAt = loggedAt
     }
@@ -151,7 +173,13 @@ struct WorkoutExercise: Identifiable, Codable, Equatable {
                 WorkoutSet(id: UUID(), weightKg: legacyWeight, reps: legacyReps)
             }
         }
-        durationMinutes = try container.decodeIfPresent(Int.self, forKey: .durationMinutes)
+        if let durationSeconds = try container.decodeIfPresent(Int.self, forKey: .durationSeconds) {
+            self.durationSeconds = durationSeconds
+        } else if let durationMinutes = try container.decodeIfPresent(Int.self, forKey: .durationMinutes) {
+            self.durationSeconds = durationMinutes * 60
+        } else {
+            self.durationSeconds = nil
+        }
         calories = try container.decodeIfPresent(Int.self, forKey: .calories)
         loggedAt = try container.decodeIfPresent(Date.self, forKey: .loggedAt)
     }
@@ -162,7 +190,7 @@ struct WorkoutExercise: Identifiable, Codable, Equatable {
         try container.encode(name, forKey: .name)
         try container.encode(type, forKey: .type)
         try container.encode(sets, forKey: .sets)
-        try container.encodeIfPresent(durationMinutes, forKey: .durationMinutes)
+        try container.encodeIfPresent(durationSeconds, forKey: .durationSeconds)
         try container.encodeIfPresent(calories, forKey: .calories)
         try container.encodeIfPresent(loggedAt, forKey: .loggedAt)
     }
@@ -175,15 +203,56 @@ struct WorkoutExercise: Identifiable, Codable, Equatable {
         case sets
         case repsPerSet
         case durationMinutes
+        case durationSeconds
         case calories
         case loggedAt
     }
 }
 
-struct WorkoutSet: Identifiable, Codable, Equatable {
+struct WorkoutSetSegment: Identifiable, Codable, Equatable {
     let id: UUID
     let weightKg: Double
     let reps: Int
+}
+
+struct WorkoutSet: Identifiable, Codable, Equatable {
+    let id: UUID
+    let segments: [WorkoutSetSegment]
+
+    init(id: UUID, segments: [WorkoutSetSegment]) {
+        self.id = id
+        self.segments = segments
+    }
+
+    init(id: UUID, weightKg: Double, reps: Int) {
+        self.id = id
+        self.segments = [WorkoutSetSegment(id: UUID(), weightKg: weightKg, reps: reps)]
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        if let segments = try? container.decode([WorkoutSetSegment].self, forKey: .segments) {
+            self.segments = segments
+        } else {
+            let weightKg = try container.decodeIfPresent(Double.self, forKey: .weightKg) ?? 0
+            let reps = try container.decodeIfPresent(Int.self, forKey: .reps) ?? 0
+            self.segments = [WorkoutSetSegment(id: UUID(), weightKg: weightKg, reps: reps)]
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(segments, forKey: .segments)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case segments
+        case weightKg
+        case reps
+    }
 }
 
 struct TemplateExercise: Identifiable, Codable, Equatable {
@@ -237,6 +306,12 @@ struct TemplateExercise: Identifiable, Codable, Equatable {
         case weightKg
         case sets
         case repsPerSet
+    }
+}
+
+extension WorkoutExercise {
+    var allSegments: [WorkoutSetSegment] {
+        sets.flatMap(\.segments)
     }
 }
 
@@ -294,16 +369,16 @@ extension WorkoutSession {
                         name: existing.name,
                         type: existing.type,
                         sets: combinedSets,
-                        durationMinutes: nil,
+                        durationSeconds: nil,
                         calories: nil,
                         loggedAt: mergedLoggedAt
                     )
                 case .cardio:
-                    let currentMinutes = existing.durationMinutes ?? 0
+                    let currentSeconds = existing.durationSeconds ?? 0
                     let currentCalories = existing.calories ?? 0
-                    let addMinutes = exercise.durationMinutes ?? 0
+                    let addSeconds = exercise.durationSeconds ?? 0
                     let addCalories = exercise.calories ?? 0
-                    let totalMinutes = currentMinutes + addMinutes
+                    let totalSeconds = currentSeconds + addSeconds
                     let totalCalories = currentCalories + addCalories
                     let mergedLoggedAt = [existing.loggedAt, exercise.loggedAt].compactMap { $0 }.min()
                     mergedByKey[key] = WorkoutExercise(
@@ -311,7 +386,7 @@ extension WorkoutSession {
                         name: existing.name,
                         type: existing.type,
                         sets: [],
-                        durationMinutes: totalMinutes > 0 ? totalMinutes : nil,
+                        durationSeconds: totalSeconds > 0 ? totalSeconds : nil,
                         calories: totalCalories > 0 ? totalCalories : nil,
                         loggedAt: mergedLoggedAt
                     )
@@ -350,6 +425,7 @@ struct WorkoutBackup: Codable {
     let sessions: [WorkoutSession]
     let templates: [WorkoutTemplate]
     let entries: [WorkoutExercise]?
+    let notes: [String: String]?
 }
 
 struct BackupDocument: FileDocument {
@@ -377,6 +453,7 @@ final class WorkoutStore: ObservableObject {
     @Published private(set) var exerciseLibrary: [LibraryExercise] = WorkoutStore.defaultLibrary
     private var hasLoaded = false
     @Published private var exerciseTypeMap: [String: ExerciseType] = [:]
+    @Published private var exerciseNotes: [String: String] = [:]
     @Published var defaultWeightUnit: WeightUnit = .kg {
         didSet { saveDefaultWeightUnit() }
     }
@@ -397,7 +474,7 @@ final class WorkoutStore: ObservableObject {
                 name: exercise.name,
                 type: exercise.type,
                 sets: exercise.sets,
-                durationMinutes: exercise.durationMinutes,
+                durationSeconds: exercise.durationSeconds,
                 calories: exercise.calories,
                 loggedAt: exercise.loggedAt ?? date
             )
@@ -429,23 +506,23 @@ final class WorkoutStore: ObservableObject {
                         name: current.name,
                         type: current.type,
                         sets: combinedSets,
-                        durationMinutes: nil,
+                        durationSeconds: nil,
                         calories: nil,
                         loggedAt: mergedLoggedAt(current: current, incoming: exercise)
                     )
                 case .cardio:
-                    let currentMinutes = current.durationMinutes ?? 0
+                    let currentSeconds = current.durationSeconds ?? 0
                     let currentCalories = current.calories ?? 0
-                    let addMinutes = exercise.durationMinutes ?? 0
+                    let addSeconds = exercise.durationSeconds ?? 0
                     let addCalories = exercise.calories ?? 0
-                    let totalMinutes = currentMinutes + addMinutes
+                    let totalSeconds = currentSeconds + addSeconds
                     let totalCalories = currentCalories + addCalories
                     merged[idx] = WorkoutExercise(
                         id: current.id,
                         name: current.name,
                         type: current.type,
                         sets: [],
-                        durationMinutes: totalMinutes > 0 ? totalMinutes : nil,
+                        durationSeconds: totalSeconds > 0 ? totalSeconds : nil,
                         calories: totalCalories > 0 ? totalCalories : nil,
                         loggedAt: mergedLoggedAt(current: current, incoming: exercise)
                     )
@@ -585,7 +662,7 @@ final class WorkoutStore: ObservableObject {
             name: exercise.name,
             type: exercise.type,
             sets: exercise.sets,
-            durationMinutes: exercise.durationMinutes,
+            durationSeconds: exercise.durationSeconds,
             calories: exercise.calories,
             loggedAt: loggedAt
         )
@@ -600,7 +677,7 @@ final class WorkoutStore: ObservableObject {
                 name: exercise.name,
                 type: exercise.type,
                 sets: exercise.sets,
-                durationMinutes: exercise.durationMinutes,
+                durationSeconds: exercise.durationSeconds,
                 calories: exercise.calories,
                 loggedAt: exercise.loggedAt ?? date
             )
@@ -681,7 +758,7 @@ final class WorkoutStore: ObservableObject {
                 switch exercise.type {
                 case .cardio:
                     let duration = latest.exercise.type == .cardio
-                        ? formattedOptionalInt(latest.exercise.durationMinutes)
+                        ? formattedDurationValue(latest.exercise.durationSeconds)
                         : ""
                     let calories = latest.exercise.type == .cardio
                         ? formattedOptionalInt(latest.exercise.calories)
@@ -694,25 +771,30 @@ final class WorkoutStore: ObservableObject {
                         durationMinutes: "",
                         calories: "",
                         durationPlaceholder: duration,
-                        caloriesPlaceholder: calories
+                        caloriesPlaceholder: calories,
+                        note: note(for: trimmedName)
                     )
                 case .weights:
                     if latest.exercise.type == .weights {
                         let setDrafts = latest.exercise.sets.map { set in
-                            WorkoutSetDraft(
-                                weight: "",
-                                reps: "",
-                                weightPlaceholder: set.weightKg == 0
-                                    ? ""
-                                    : String(format: "%.1f", weightValue(set.weightKg, unit: defaultWeightUnit)),
-                                repsPlaceholder: "\(set.reps)"
-                            )
+                            let segmentDrafts = set.segments.map { segment in
+                                WorkoutSetSegmentDraft(
+                                    weight: "",
+                                    reps: "",
+                                    weightPlaceholder: segment.weightKg == 0
+                                        ? "0"
+                                        : String(format: "%.1f", weightValue(segment.weightKg, unit: defaultWeightUnit)),
+                                    repsPlaceholder: "\(segment.reps)"
+                                )
+                            }
+                            return WorkoutSetDraft(segments: segmentDrafts.isEmpty ? [WorkoutSetSegmentDraft()] : segmentDrafts)
                         }
                         return ExerciseDraft(
                             name: latest.exercise.name,
                             type: .weights,
                             sets: setDrafts.isEmpty ? [WorkoutSetDraft()] : setDrafts,
-                            weightUnit: defaultWeightUnit
+                            weightUnit: defaultWeightUnit,
+                            note: note(for: latest.exercise.name)
                         )
                     }
                 }
@@ -721,7 +803,8 @@ final class WorkoutStore: ObservableObject {
                 name: trimmedName,
                 type: exercise.type,
                 sets: exercise.type == .weights ? [WorkoutSetDraft()] : [],
-                weightUnit: defaultWeightUnit
+                weightUnit: defaultWeightUnit,
+                note: note(for: trimmedName)
             )
         }
     }
@@ -764,11 +847,12 @@ final class WorkoutStore: ObservableObject {
 
     func exportBackup() -> WorkoutBackup {
         WorkoutBackup(
-            version: 2,
+            version: 3,
             exportedAt: Date(),
             sessions: sessions,
             templates: templates,
-            entries: entries
+            entries: entries,
+            notes: exerciseNotes
         )
     }
 
@@ -783,7 +867,7 @@ final class WorkoutStore: ObservableObject {
                         name: exercise.name,
                         type: exercise.type,
                         sets: exercise.sets,
-                        durationMinutes: exercise.durationMinutes,
+                        durationSeconds: exercise.durationSeconds,
                         calories: exercise.calories,
                         loggedAt: exercise.loggedAt ?? session.date
                     )
@@ -791,11 +875,13 @@ final class WorkoutStore: ObservableObject {
             }
         }
         templates = backup.templates
+        exerciseNotes = backup.notes ?? [:]
         exerciseTypeMap = [:]
         updateExerciseTypes(from: self.entries)
         updateExerciseTypes(from: templates.flatMap { $0.exercises })
         saveEntries()
         saveTemplates()
+        saveExerciseNotes()
         refreshSessions()
     }
 
@@ -814,11 +900,13 @@ final class WorkoutStore: ObservableObject {
         sessions = []
         templates = []
         exerciseTypeMap = [:]
+        exerciseNotes = [:]
         saveEntries()
         saveTemplates()
         saveExerciseTypes()
+        saveExerciseNotes()
 
-        let urls = [sessionsFileURL(), entriesFileURL(), templatesFileURL(), exerciseTypesFileURL()]
+        let urls = [sessionsFileURL(), entriesFileURL(), templatesFileURL(), exerciseTypesFileURL(), exerciseNotesFileURL()]
         for url in urls {
             try? FileManager.default.removeItem(at: url)
         }
@@ -848,7 +936,7 @@ final class WorkoutStore: ObservableObject {
                         name: exercise.name,
                         type: exercise.type,
                         sets: exercise.sets,
-                        durationMinutes: exercise.durationMinutes,
+                        durationSeconds: exercise.durationSeconds,
                         calories: exercise.calories,
                         loggedAt: exercise.loggedAt ?? session.date
                     )
@@ -857,6 +945,7 @@ final class WorkoutStore: ObservableObject {
         }
         templates = loadTemplates()
         exerciseTypeMap = loadExerciseTypes()
+        exerciseNotes = loadExerciseNotes()
         hasLoaded = true
         updateExerciseTypes(from: entries)
         let templateExercises = templates.flatMap { $0.exercises }
@@ -872,6 +961,28 @@ final class WorkoutStore: ObservableObject {
         let key = normalizedExerciseKey(name)
         guard !key.isEmpty else { return nil }
         return exerciseTypeMap[key]
+    }
+
+    func note(for name: String) -> String {
+        let key = normalizedExerciseKey(name)
+        guard !key.isEmpty else { return "" }
+        return exerciseNotes[key] ?? ""
+    }
+
+    func setNote(_ note: String, for name: String) {
+        let key = normalizedExerciseKey(name)
+        guard !key.isEmpty else { return }
+        let trimmed = note.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            if exerciseNotes.removeValue(forKey: key) != nil {
+                saveExerciseNotes()
+            }
+            return
+        }
+        if exerciseNotes[key] != trimmed {
+            exerciseNotes[key] = trimmed
+            saveExerciseNotes()
+        }
     }
 
     private func updateExerciseTypes(from exercises: [WorkoutExercise]) {
@@ -932,6 +1043,15 @@ final class WorkoutStore: ObservableObject {
         }
     }
 
+    private func loadExerciseNotes() -> [String: String] {
+        do {
+            let data = try Data(contentsOf: exerciseNotesFileURL())
+            return try JSONDecoder().decode([String: String].self, from: data)
+        } catch {
+            return [:]
+        }
+    }
+
     private func saveExerciseTypes() {
         guard hasLoaded else { return }
         do {
@@ -942,6 +1062,19 @@ final class WorkoutStore: ObservableObject {
                 withIntermediateDirectories: true,
                 attributes: nil
             )
+            try data.write(to: url, options: [.atomic])
+        } catch {
+            // Ignore write failures; user can continue without persistence.
+        }
+    }
+
+    private func saveExerciseNotes() {
+        guard hasLoaded else { return }
+        do {
+            let data = try JSONEncoder().encode(exerciseNotes)
+            let url = exerciseNotesFileURL()
+            try FileManager.default
+                .createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: nil)
             try data.write(to: url, options: [.atomic])
         } catch {
             // Ignore write failures; user can continue without persistence.
@@ -1075,7 +1208,7 @@ final class WorkoutStore: ObservableObject {
                                 sets: (0..<max(entry.sets, 0)).map { _ in
                                     WorkoutSet(id: UUID(), weightKg: entry.weightKg, reps: entry.repsPerSet)
                                 },
-                                durationMinutes: nil,
+                                durationSeconds: nil,
                                 calories: nil,
                                 loggedAt: entry.date
                             )
@@ -1182,6 +1315,11 @@ final class WorkoutStore: ObservableObject {
     private func exerciseTypesFileURL() -> URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         return base.appendingPathComponent("MyWorkout/exercise-types.json")
+    }
+
+    private func exerciseNotesFileURL() -> URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        return base.appendingPathComponent("MyWorkout/exercise-notes.json")
     }
 
     private struct LegacyWorkoutEntry: Codable {
@@ -1475,7 +1613,11 @@ struct HomeView: View {
                     Button {
                         startQuickWorkout(for: name)
                     } label: {
-                        ExerciseHistoryCard(name: name, record: store.latestExerciseRecord(named: name))
+                        ExerciseHistoryCard(
+                            name: name,
+                            record: store.latestExerciseRecord(named: name),
+                            weightUnit: store.defaultWeightUnit
+                        )
                     }
                     .buttonStyle(.plain)
                 }
@@ -1616,11 +1758,11 @@ struct HistoryView: View {
             }
             .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(for: UUID.self) { id in
-                                if let session = store.sessions.first(where: { $0.id == id }) {
-                                    SessionDetailView(session: session) {
-                                        editingSession = session
-                                    }
-                                }
+                if let session = store.sessions.first(where: { $0.id == id }) {
+                    SessionDetailView(session: session, weightUnit: store.defaultWeightUnit) {
+                        editingSession = session
+                    }
+                }
             }
         }
         .onChange(of: store.sessions) { _, newSessions in
@@ -1841,6 +1983,12 @@ struct SettingsView: View {
             Text("Track what you lift, keep it simple.")
                 .font(.custom("Avenir Next", size: 13))
                 .foregroundStyle(Color("Sand").opacity(0.7))
+            Text("Data stays on device unless you export a backup.")
+                .font(.custom("Avenir Next", size: 12))
+                .foregroundStyle(Color("Sand").opacity(0.6))
+            Text("License: MIT")
+                .font(.custom("Avenir Next", size: 12))
+                .foregroundStyle(Color("Sand").opacity(0.6))
             Text("Version \(appVersion)")
                 .font(.custom("Avenir Next", size: 12))
                 .foregroundStyle(Color("Sand").opacity(0.6))
@@ -2172,7 +2320,7 @@ struct ProgressTabView: View {
                                     .foregroundStyle(Color("Sand").opacity(0.6))
                             }
                             Spacer()
-                            Text(String(format: "%.1f kg x %d", item.weight, item.reps))
+                            Text("\(formattedWeight(item.weight, unit: store.defaultWeightUnit)) x \(item.reps)")
                                 .font(.custom("Avenir Next", size: 14))
                                 .foregroundStyle(Color("Sand"))
                         }
@@ -2265,9 +2413,9 @@ struct ProgressTabView: View {
             guard let exercise = session.mergedExercises().first(where: {
                 $0.type == .weights && $0.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == name.lowercased()
             }) else { continue }
-            let bestSet = exercise.sets.max { $0.weightKg < $1.weightKg }
-            guard let bestSet else { continue }
-            points.append(StrengthPoint(date: session.date, weight: bestSet.weightKg, reps: bestSet.reps))
+            let bestSegment = exercise.allSegments.max { $0.weightKg < $1.weightKg }
+            guard let bestSegment else { continue }
+            points.append(StrengthPoint(date: session.date, weight: bestSegment.weightKg, reps: bestSegment.reps))
         }
         return points
     }
@@ -2275,7 +2423,7 @@ struct ProgressTabView: View {
     private var volumePoints: [VolumePoint] {
         filteredSessions.map { session in
             let volume = session.mergedExercises().filter { $0.type == .weights }.reduce(0.0) { total, exercise in
-                total + exercise.sets.reduce(0.0) { $0 + ($1.weightKg * Double($1.reps)) }
+                total + exercise.allSegments.reduce(0.0) { $0 + ($1.weightKg * Double($1.reps)) }
             }
             return VolumePoint(date: session.date, volume: volume)
         }
@@ -2299,13 +2447,14 @@ struct ProgressTabView: View {
             Calendar.current.date(from: Calendar.current.dateComponents([.yearForWeekOfYear, .weekOfYear], from: session.date)) ?? session.date
         }
         return grouped.map { weekStart, sessions in
-            let totals = sessions.reduce(into: (minutes: 0, calories: 0)) { result, session in
+            let totals = sessions.reduce(into: (seconds: 0, calories: 0)) { result, session in
                 for exercise in session.mergedExercises() where exercise.type == .cardio {
-                    result.minutes += exercise.durationMinutes ?? 0
+                    result.seconds += exercise.durationSeconds ?? 0
                     result.calories += exercise.calories ?? 0
                 }
             }
-            return WeekPoint(weekStart: weekStart, value: 0, calories: totals.calories, minutes: totals.minutes)
+            let minutes = totals.seconds / 60
+            return WeekPoint(weekStart: weekStart, value: 0, calories: totals.calories, minutes: minutes)
         }
         .sorted { $0.weekStart < $1.weekStart }
     }
@@ -2317,12 +2466,12 @@ struct ProgressTabView: View {
         for session in sessions {
             for exercise in session.mergedExercises() where exercise.type == .weights {
                 let name = exercise.name
-                let bestSet = exercise.sets.max { $0.weightKg < $1.weightKg }
-                guard let bestSet else { continue }
+                let bestSegment = exercise.allSegments.max { $0.weightKg < $1.weightKg }
+                guard let bestSegment else { continue }
                 let currentBest = bestByName[name] ?? 0
-                if bestSet.weightKg > currentBest {
-                    bestByName[name] = bestSet.weightKg
-                    items.append(PRItem(name: name, date: session.date, weight: bestSet.weightKg, reps: bestSet.reps))
+                if bestSegment.weightKg > currentBest {
+                    bestByName[name] = bestSegment.weightKg
+                    items.append(PRItem(name: name, date: session.date, weight: bestSegment.weightKg, reps: bestSegment.reps))
                 }
             }
         }
@@ -2347,6 +2496,7 @@ struct ProgressTabView: View {
 struct ExerciseHistoryCard: View {
     let name: String
     let record: (exercise: WorkoutExercise, date: Date)?
+    let weightUnit: WeightUnit
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -2383,23 +2533,23 @@ struct ExerciseHistoryCard: View {
         switch exercise.type {
         case .weights:
             let setCount = exercise.sets.count
-            let maxWeight = exercise.sets.map(\.weightKg).max() ?? 0
-            let maxReps = exercise.sets.map(\.reps).max() ?? 0
-            let isBodyweight = !exercise.sets.isEmpty && exercise.sets.allSatisfy { $0.weightKg == 0 }
+            let maxWeight = exercise.allSegments.map(\.weightKg).max() ?? 0
+            let maxReps = exercise.allSegments.map(\.reps).max() ?? 0
+            let isBodyweight = !exercise.sets.isEmpty && exercise.allSegments.allSatisfy { $0.weightKg == 0 }
             var tags = ["\(setCount) sets"]
             if setCount > 0 {
                 if isBodyweight {
                     tags.append("Bodyweight")
                 } else {
-                    tags.append(String(format: "Max %.1f kg", maxWeight))
+                    tags.append("Max \(formattedWeight(maxWeight, unit: weightUnit))")
                 }
                 tags.append("Max \(maxReps) reps")
             }
             return tags
         case .cardio:
             var tags: [String] = []
-            if let duration = exercise.durationMinutes, duration > 0 {
-                tags.append("\(duration) min")
+            if let duration = exercise.durationSeconds, duration > 0 {
+                tags.append(durationLabel(duration))
             }
             if let calories = exercise.calories, calories > 0 {
                 tags.append("\(calories) cal")
@@ -2419,6 +2569,8 @@ struct ExerciseDraft: Identifiable, Equatable {
     var calories: String
     var durationPlaceholder: String
     var caloriesPlaceholder: String
+    var note: String
+    var isNoteExpanded: Bool
     var entryId: UUID?
     var loggedAt: Date?
 
@@ -2432,6 +2584,8 @@ struct ExerciseDraft: Identifiable, Equatable {
         calories: String = "",
         durationPlaceholder: String = "",
         caloriesPlaceholder: String = "",
+        note: String = "",
+        isNoteExpanded: Bool = false,
         entryId: UUID? = nil,
         loggedAt: Date? = nil
     ) {
@@ -2444,12 +2598,14 @@ struct ExerciseDraft: Identifiable, Equatable {
         self.calories = calories
         self.durationPlaceholder = durationPlaceholder
         self.caloriesPlaceholder = caloriesPlaceholder
+        self.note = note
+        self.isNoteExpanded = isNoteExpanded
         self.entryId = entryId
         self.loggedAt = loggedAt
     }
 }
 
-struct WorkoutSetDraft: Identifiable, Equatable {
+struct WorkoutSetSegmentDraft: Identifiable, Equatable {
     let id: UUID
     var weight: String
     var reps: String
@@ -2471,6 +2627,19 @@ struct WorkoutSetDraft: Identifiable, Equatable {
     }
 }
 
+struct WorkoutSetDraft: Identifiable, Equatable {
+    let id: UUID
+    var segments: [WorkoutSetSegmentDraft]
+
+    init(
+        id: UUID = UUID(),
+        segments: [WorkoutSetSegmentDraft] = [WorkoutSetSegmentDraft()]
+    ) {
+        self.id = id
+        self.segments = segments
+    }
+}
+
 struct AddWorkoutView: View {
     @ObservedObject var store: WorkoutStore
     let template: WorkoutTemplate?
@@ -2480,6 +2649,7 @@ struct AddWorkoutView: View {
     @State private var workoutDate = Date()
     @State private var drafts: [ExerciseDraft] = []
     @State private var hasLoadedDrafts = false
+    @State private var isKeyboardVisible = false
 
     private var validation: (validExercises: [WorkoutExercise], hasInvalid: Bool) {
         var validExercises: [WorkoutExercise] = []
@@ -2493,36 +2663,54 @@ struct AddWorkoutView: View {
                 var hasPartialSet = false
 
                 for setDraft in draft.sets {
-                    let weightText = setDraft.weight.trimmingCharacters(in: .whitespacesAndNewlines)
-                    let repsText = setDraft.reps.trimmingCharacters(in: .whitespacesAndNewlines)
+                    var segmentModels: [WorkoutSetSegment] = []
+                    var hasPartialSegment = false
 
-                    if weightText.isEmpty && repsText.isEmpty {
-                        continue
+                    for segment in setDraft.segments {
+                        let weightText = segment.weight.trimmingCharacters(in: .whitespacesAndNewlines)
+                        let repsText = segment.reps.trimmingCharacters(in: .whitespacesAndNewlines)
+
+                        if weightText.isEmpty && repsText.isEmpty {
+                            continue
+                        }
+
+                        if weightText.isEmpty || repsText.isEmpty {
+                            hasPartialSegment = true
+                            continue
+                        }
+
+                        guard let inputValue = Double(weightText),
+                              let repsValue = Int(repsText) else {
+                            hasPartialSegment = true
+                            continue
+                        }
+
+                        let weightValue = draft.weightUnit == .lb ? inputValue * 0.45359237 : inputValue
+                        guard repsValue > 0, weightValue >= 0 else {
+                            hasPartialSegment = true
+                            continue
+                        }
+
+                        segmentModels.append(WorkoutSetSegment(id: UUID(), weightKg: weightValue, reps: repsValue))
                     }
 
-                    if weightText.isEmpty || repsText.isEmpty {
+                    if hasPartialSegment {
                         hasPartialSet = true
                         continue
                     }
 
-                    guard let inputValue = Double(weightText),
-                          let repsValue = Int(repsText) else {
-                        hasPartialSet = true
+                    guard !segmentModels.isEmpty else {
                         continue
                     }
 
-                    let weightValue = draft.weightUnit == .lb ? inputValue * 0.45359237 : inputValue
-                    guard repsValue > 0, weightValue >= 0 else {
-                        hasPartialSet = true
-                        continue
-                    }
-
-                    setModels.append(WorkoutSet(id: UUID(), weightKg: weightValue, reps: repsValue))
+                    setModels.append(WorkoutSet(id: UUID(), segments: segmentModels))
                 }
 
-                let hasAnySetInput = draft.sets.contains {
-                    !$0.weight.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
-                    !$0.reps.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                let hasAnySetInput = draft.sets.contains { set in
+                    set.segments.contains {
+                        !$0.weight.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                        !$0.reps.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    }
                 }
 
                 if hasPartialSet {
@@ -2550,7 +2738,7 @@ struct AddWorkoutView: View {
                         name: name,
                         type: .weights,
                         sets: setModels,
-                        durationMinutes: nil,
+                        durationSeconds: nil,
                         calories: nil,
                         loggedAt: draft.loggedAt ?? workoutDate
                     )
@@ -2558,7 +2746,7 @@ struct AddWorkoutView: View {
             case .cardio:
                 let durationTrimmed = draft.durationMinutes.trimmingCharacters(in: .whitespacesAndNewlines)
                 let caloriesTrimmed = draft.calories.trimmingCharacters(in: .whitespacesAndNewlines)
-                let durationValue = durationTrimmed.isEmpty ? nil : Int(durationTrimmed)
+                let durationValue = durationTrimmed.isEmpty ? nil : parseDurationSeconds(durationTrimmed)
                 let caloriesValue = caloriesTrimmed.isEmpty ? nil : Int(caloriesTrimmed)
                 let hasMetrics = durationValue != nil || caloriesValue != nil
 
@@ -2567,6 +2755,10 @@ struct AddWorkoutView: View {
                     continue
                 }
 
+                if !durationTrimmed.isEmpty && durationValue == nil {
+                    hasInvalid = true
+                    continue
+                }
                 if let durationValue, durationValue <= 0 { hasInvalid = true; continue }
                 if let caloriesValue, caloriesValue <= 0 { hasInvalid = true; continue }
 
@@ -2585,7 +2777,7 @@ struct AddWorkoutView: View {
                         name: name,
                         type: .cardio,
                         sets: [],
-                        durationMinutes: durationValue,
+                        durationSeconds: durationValue,
                         calories: caloriesValue,
                         loggedAt: draft.loggedAt ?? workoutDate
                     )
@@ -2598,6 +2790,26 @@ struct AddWorkoutView: View {
 
     private var validExercises: [WorkoutExercise] {
         validation.validExercises
+    }
+
+    private func parseDurationSeconds(_ text: String) -> Int? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleaned = trimmed.filter { !$0.isWhitespace }
+        guard !cleaned.isEmpty else { return nil }
+        if cleaned.contains(":") {
+            let parts = cleaned.split(separator: ":")
+            guard parts.count == 2,
+                  let minutes = Int(parts[0]),
+                  let seconds = Int(parts[1]),
+                  minutes >= 0,
+                  seconds >= 0,
+                  seconds < 60 else {
+                return nil
+            }
+            return minutes * 60 + seconds
+        }
+        guard let minutes = Int(cleaned), minutes >= 0 else { return nil }
+        return minutes * 60
     }
 
     private var canSave: Bool {
@@ -2621,53 +2833,66 @@ struct AddWorkoutView: View {
             )
             .ignoresSafeArea()
 
-            VStack(spacing: 0) {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 16) {
-                        Text(titleText)
-                            .font(.custom("Avenir Next", size: 28))
-                            .fontWeight(.semibold)
-                            .foregroundStyle(Color("Sand"))
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text(titleText)
+                        .font(.custom("Avenir Next", size: 28))
+                        .fontWeight(.semibold)
+                        .foregroundStyle(Color("Sand"))
 
-                        datePickerCard
+                    datePickerCard
 
-                        ForEach($drafts) { $draft in
-                            ExerciseEditorRow(
-                                draft: $draft,
-                                suggestions: store.exerciseNameCatalog(),
-                                showsMetrics: true,
-                                knownType: store.exerciseType(for: draft.name),
-                                onDelete: {
-                                    drafts.removeAll { $0.id == draft.id }
-                                },
-                                onMoveUp: nil,
-                                onMoveDown: nil
-                            )
-                        }
-
-                        Button {
-                            drafts.append(ExerciseDraft(weightUnit: store.defaultWeightUnit))
-                        } label: {
-                            HStack {
-                                Image(systemName: "plus.circle")
-                                Text("Add Exercise")
-                            }
-                            .font(.custom("Avenir Next", size: 16))
-                            .foregroundStyle(Color("Sand"))
-                        }
+                    ForEach($drafts) { $draft in
+                        ExerciseEditorRow(
+                            draft: $draft,
+                            suggestions: store.exerciseNameCatalog(),
+                            showsMetrics: true,
+                            knownType: store.exerciseType(for: draft.name),
+                            noteForName: store.note(for:),
+                            onDelete: {
+                                drafts.removeAll { $0.id == draft.id }
+                            },
+                            onMoveUp: nil,
+                            onMoveDown: nil
+                        )
                     }
-                    .padding(24)
-                }
 
+                    Button {
+                        drafts.append(ExerciseDraft(weightUnit: store.defaultWeightUnit))
+                    } label: {
+                        HStack {
+                            Image(systemName: "plus.circle")
+                            Text("Add Exercise")
+                        }
+                        .font(.custom("Avenir Next", size: 16))
+                        .foregroundStyle(Color("Sand"))
+                    }
+                }
+                .padding(24)
+                .padding(.bottom, 120)
+            }
+            .scrollDismissesKeyboard(.interactively)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        }
+        .safeAreaInset(edge: .bottom) {
+            if !isKeyboardVisible {
                 VStack(spacing: 10) {
                     Button {
-                        if let session {
-                            store.updateSession(session, date: workoutDate, exercises: validExercises)
-                        } else {
-                            store.addSession(date: workoutDate, exercises: validExercises)
-                        }
-                        dismiss()
-                    } label: {
+                    if let session {
+                        store.updateSession(session, date: workoutDate, exercises: validExercises)
+                    } else {
+                        store.addSession(date: workoutDate, exercises: validExercises)
+                    }
+                    for draft in drafts {
+                        let name = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !name.isEmpty else { continue }
+                        store.setNote(draft.note, for: name)
+                    }
+                    dismiss()
+                } label: {
                         Text(saveLabel)
                             .font(.custom("Avenir Next", size: 18))
                             .frame(maxWidth: .infinity)
@@ -2695,6 +2920,17 @@ struct AddWorkoutView: View {
                 }
                 .padding(.horizontal, 24)
                 .padding(.bottom, 12)
+                .background(
+                    LinearGradient(
+                        colors: [
+                            Color("Night").opacity(0.0),
+                            Color("Night").opacity(0.85)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    .ignoresSafeArea()
+                )
             }
         }
         .onAppear {
@@ -2711,23 +2947,35 @@ struct AddWorkoutView: View {
                 drafts = [ExerciseDraft(weightUnit: store.defaultWeightUnit)]
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+            isKeyboardVisible = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            isKeyboardVisible = false
+        }
     }
 
     private func drafts(for session: WorkoutSession) -> [ExerciseDraft] {
         session.exercises.map { exercise in
             switch exercise.type {
             case .weights:
-                let setDrafts = exercise.sets.map {
-                    WorkoutSetDraft(
-                        weight: $0.weightKg == 0 ? "" : String(format: "%.1f", weightValue($0.weightKg, unit: store.defaultWeightUnit)),
-                        reps: "\($0.reps)"
-                    )
+                let setDrafts = exercise.sets.map { set in
+                    let segmentDrafts = set.segments.map { segment in
+                        WorkoutSetSegmentDraft(
+                            weight: segment.weightKg == 0
+                                ? "0"
+                                : String(format: "%.1f", weightValue(segment.weightKg, unit: store.defaultWeightUnit)),
+                            reps: "\(segment.reps)"
+                        )
+                    }
+                    return WorkoutSetDraft(segments: segmentDrafts.isEmpty ? [WorkoutSetSegmentDraft()] : segmentDrafts)
                 }
                 return ExerciseDraft(
                     name: exercise.name,
                     type: .weights,
                     sets: setDrafts.isEmpty ? [WorkoutSetDraft()] : setDrafts,
                     weightUnit: store.defaultWeightUnit,
+                    note: store.note(for: exercise.name),
                     entryId: exercise.id,
                     loggedAt: exercise.loggedAt
                 )
@@ -2737,8 +2985,9 @@ struct AddWorkoutView: View {
                     type: .cardio,
                     sets: [],
                     weightUnit: store.defaultWeightUnit,
-                    durationMinutes: formattedOptionalInt(exercise.durationMinutes),
+                    durationMinutes: formattedDurationValue(exercise.durationSeconds),
                     calories: formattedOptionalInt(exercise.calories),
+                    note: store.note(for: exercise.name),
                     entryId: exercise.id,
                     loggedAt: exercise.loggedAt
                 )
@@ -2800,6 +3049,7 @@ struct ExerciseEditorRow: View {
     let suggestions: [String]
     let showsMetrics: Bool
     let knownType: ExerciseType?
+    let noteForName: ((String) -> String)?
     let onDelete: () -> Void
     let onMoveUp: (() -> Void)?
     let onMoveDown: (() -> Void)?
@@ -2837,6 +3087,12 @@ struct ExerciseEditorRow: View {
         .onChange(of: draft.name) { _, _ in
             if let knownType {
                 draft.type = knownType
+            }
+            if let noteForName, draft.note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                let note = noteForName(draft.name)
+                if !note.isEmpty {
+                    draft.note = note
+                }
             }
         }
         .onChange(of: draft.type) { _, newValue in
@@ -2896,10 +3152,13 @@ struct ExerciseEditorRow: View {
     @ViewBuilder
     private var metricsSection: some View {
         if showsMetrics {
-            if draft.type == .weights {
-                weightsSection
-            } else {
-                cardioSection
+            VStack(alignment: .leading, spacing: 12) {
+                if draft.type == .weights {
+                    weightsSection
+                } else {
+                    cardioSection
+                }
+                notesSection
             }
         }
     }
@@ -2908,34 +3167,15 @@ struct ExerciseEditorRow: View {
         VStack(spacing: 10) {
             ForEach($draft.sets) { $set in
                 let setId = $set.wrappedValue.id
-                HStack(alignment: .center, spacing: 12) {
-                    InputCard(
-                        title: "Reps",
-                        text: $set.reps,
-                        placeholder: set.repsPlaceholder.isEmpty ? "10" : set.repsPlaceholder,
-                        keyboard: .numberPad
-                    )
-                    InputCard(
-                        title: "Weight",
-                        text: $set.weight,
-                        placeholder: set.weightPlaceholder.isEmpty ? "10" : set.weightPlaceholder,
-                        keyboard: .decimalPad
-                    )
-                    if isBodyweightSet(set) {
-                        BodyweightPillAligned(isCompact: draft.sets.count > 1)
-                    } else {
-                        UnitPillAligned(unit: $draft.weightUnit)
+                SetCardView(
+                    set: $set,
+                    weightUnit: $draft.weightUnit,
+                    isCompact: draft.sets.count > 1,
+                    canRemoveSet: draft.sets.count > 1,
+                    isBodyweightSegment: isBodyweightSegment,
+                    onRemoveSet: {
+                        draft.sets.removeAll { $0.id == setId }
                     }
-                    if draft.sets.count > 1 {
-                        SetRemoveButtonAligned {
-                            draft.sets.removeAll { $0.id == setId }
-                        }
-                    }
-                }
-                .padding(5)
-                .background(
-                    RoundedRectangle(cornerRadius: 14)
-                        .fill(Color("Card").opacity(0.6))
                 )
             }
             .animation(.easeInOut(duration: 0.2), value: draft.sets.count)
@@ -2961,10 +3201,10 @@ struct ExerciseEditorRow: View {
     private var cardioSection: some View {
         HStack(spacing: 12) {
             InputCard(
-                title: "Time (min)",
+                title: "Time (mm:ss)",
                 text: $draft.durationMinutes,
-                placeholder: draft.durationPlaceholder.isEmpty ? "20" : draft.durationPlaceholder,
-                keyboard: .numberPad
+                placeholder: draft.durationPlaceholder.isEmpty ? "20:00" : draft.durationPlaceholder,
+                keyboard: .numbersAndPunctuation
             )
             InputCard(
                 title: "Calories",
@@ -2972,6 +3212,90 @@ struct ExerciseEditorRow: View {
                 placeholder: draft.caloriesPlaceholder.isEmpty ? "150" : draft.caloriesPlaceholder,
                 keyboard: .numberPad
             )
+        }
+    }
+
+    @ViewBuilder
+    private var notesSection: some View {
+        let trimmedNote = draft.note.trimmingCharacters(in: .whitespacesAndNewlines)
+        VStack(alignment: .leading, spacing: 8) {
+            if draft.isNoteExpanded {
+                Text("Note")
+                    .font(.custom("Avenir Next", size: 12))
+                    .foregroundStyle(Color("Sand").opacity(0.6))
+                ZStack(alignment: .topLeading) {
+                    if trimmedNote.isEmpty {
+                        Text("Add a note for next time…")
+                            .font(.custom("Avenir Next", size: 13))
+                            .foregroundStyle(Color("Sand").opacity(0.4))
+                            .padding(.top, 10)
+                            .padding(.leading, 12)
+                    }
+                    TextEditor(text: $draft.note)
+                        .font(.custom("Avenir Next", size: 13))
+                        .foregroundStyle(Color("Sand"))
+                        .scrollContentBackground(.hidden)
+                        .padding(8)
+                }
+                .frame(minHeight: 80)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Color("Card").opacity(0.85))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(Color("Sand").opacity(0.12), lineWidth: 1)
+                        )
+                )
+
+                Button {
+                    draft.isNoteExpanded = false
+                } label: {
+                    Text(trimmedNote.isEmpty ? "Hide Note" : "Done")
+                        .font(.custom("Avenir Next", size: 14))
+                        .foregroundStyle(Color("Sand"))
+                }
+                .buttonStyle(.plain)
+            } else if trimmedNote.isEmpty {
+                Button {
+                    draft.isNoteExpanded = true
+                } label: {
+                    HStack {
+                        Image(systemName: "plus.circle")
+                        Text("Add Note")
+                    }
+                    .font(.custom("Avenir Next", size: 15))
+                    .foregroundStyle(Color("Sand"))
+                }
+                .buttonStyle(.plain)
+            } else {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Note")
+                        .font(.custom("Avenir Next", size: 12))
+                        .foregroundStyle(Color("Sand").opacity(0.6))
+                    Text(trimmedNote)
+                        .font(.custom("Avenir Next", size: 13))
+                        .foregroundStyle(Color("Sand"))
+                        .lineLimit(2)
+                }
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Color("Card").opacity(0.6))
+                )
+
+                Button {
+                    draft.isNoteExpanded = true
+                } label: {
+                    HStack {
+                        Image(systemName: "pencil")
+                        Text("Edit Note")
+                    }
+                    .font(.custom("Avenir Next", size: 14))
+                    .foregroundStyle(Color("Sand"))
+                }
+                .buttonStyle(.plain)
+            }
         }
     }
 
@@ -2995,23 +3319,28 @@ struct ExerciseEditorRow: View {
             multiplier = 0.45359237
         }
         draft.sets = draft.sets.map { set in
-            let value = Double(set.weight) ?? 0
-            let converted = roundToHalf(value * multiplier)
-            let placeholderValue = Double(set.weightPlaceholder) ?? 0
-            let convertedPlaceholder = roundToHalf(placeholderValue * multiplier)
-            return WorkoutSetDraft(
-                id: set.id,
-                weight: value == 0 ? "" : String(format: "%.1f", converted),
-                reps: set.reps,
-                weightPlaceholder: placeholderValue == 0 ? set.weightPlaceholder : String(format: "%.1f", convertedPlaceholder),
-                repsPlaceholder: set.repsPlaceholder
-            )
+            let segments = set.segments.map { segment in
+                let trimmedWeight = segment.weight.trimmingCharacters(in: .whitespacesAndNewlines)
+                let value = Double(trimmedWeight) ?? 0
+                let converted = roundToHalf(value * multiplier)
+                let placeholderValue = Double(segment.weightPlaceholder) ?? 0
+                let convertedPlaceholder = roundToHalf(placeholderValue * multiplier)
+                return WorkoutSetSegmentDraft(
+                    id: segment.id,
+                    weight: trimmedWeight.isEmpty ? "" : (value == 0 ? "0" : String(format: "%.1f", converted)),
+                    reps: segment.reps,
+                    weightPlaceholder: placeholderValue == 0 ? segment.weightPlaceholder : String(format: "%.1f", convertedPlaceholder),
+                    repsPlaceholder: segment.repsPlaceholder
+                )
+            }
+            return WorkoutSetDraft(id: set.id, segments: segments)
         }
     }
 
-    private func isBodyweightSet(_ set: WorkoutSetDraft) -> Bool {
-        let weight = set.weight.trimmingCharacters(in: .whitespacesAndNewlines)
-        return weight == "0"
+    private func isBodyweightSegment(_ segment: WorkoutSetSegmentDraft) -> Bool {
+        let weight = segment.weight.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let value = Double(weight) else { return false }
+        return value == 0
     }
 
 
@@ -3142,8 +3471,8 @@ struct WorkoutSessionCard: View {
             return "\(exercise.name) - \(exercise.sets.count) sets"
         case .cardio:
             var details: [String] = []
-            if let duration = exercise.durationMinutes, duration > 0 {
-                details.append("\(duration) min")
+            if let duration = exercise.durationSeconds, duration > 0 {
+                details.append(durationLabel(duration))
             }
             if let calories = exercise.calories, calories > 0 {
                 details.append("\(calories) cal")
@@ -3158,6 +3487,7 @@ struct WorkoutSessionCard: View {
 
 struct SessionDetailView: View {
     let session: WorkoutSession
+    let weightUnit: WeightUnit
     let onEdit: () -> Void
 
     var body: some View {
@@ -3177,7 +3507,7 @@ struct SessionDetailView: View {
                         .foregroundStyle(Color("Sand"))
 
                     ForEach(session.mergedExercises()) { exercise in
-                        ExerciseDetailCard(exercise: exercise)
+                        ExerciseDetailCard(exercise: exercise, weightUnit: weightUnit)
                     }
                 }
                 .padding(24)
@@ -3198,6 +3528,7 @@ struct SessionDetailView: View {
 
 struct ExerciseDetailCard: View {
     let exercise: WorkoutExercise
+    let weightUnit: WeightUnit
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -3216,15 +3547,15 @@ struct ExerciseDetailCard: View {
             case .weights:
                 VStack(alignment: .leading, spacing: 6) {
                     ForEach(Array(exercise.sets.enumerated()), id: \.element.id) { index, set in
-                        Text("Set \(index + 1): \(weightLabel(for: set.weightKg)) x \(set.reps)")
+                        Text("Set \(index + 1): \(segmentLine(for: set.segments))")
                             .font(.custom("Avenir Next", size: 13))
                             .foregroundStyle(Color("Sand").opacity(0.7))
                     }
                 }
             case .cardio:
                 VStack(alignment: .leading, spacing: 6) {
-                    if let minutes = exercise.durationMinutes, minutes > 0 {
-                        Text("Duration: \(minutes) min")
+                    if let duration = exercise.durationSeconds, duration > 0 {
+                        Text("Duration: \(durationLabel(duration))")
                             .font(.custom("Avenir Next", size: 13))
                             .foregroundStyle(Color("Sand").opacity(0.7))
                     }
@@ -3249,8 +3580,14 @@ struct ExerciseDetailCard: View {
     }
 
     private func weightLabel(for kg: Double) -> String {
-        if kg == 0 { return "Bodyweight" }
-        return String(format: "%.1f kg", kg)
+        formattedWeight(kg, unit: weightUnit)
+    }
+
+    private func segmentLine(for segments: [WorkoutSetSegment]) -> String {
+        segments.map { segment in
+            "\(weightLabel(for: segment.weightKg)) x \(segment.reps)"
+        }
+        .joined(separator: " → ")
     }
 }
 
@@ -3515,13 +3852,16 @@ struct InputCard: View {
     @Binding var text: String
     let placeholder: String
     let keyboard: UIKeyboardType
+    var showsTitle: Bool = true
     @FocusState private var isFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.custom("Avenir Next", size: 12))
-                .foregroundStyle(Color("Sand").opacity(0.75))
+            if showsTitle {
+                Text(title)
+                    .font(.custom("Avenir Next", size: 12))
+                    .foregroundStyle(Color("Sand").opacity(0.75))
+            }
             TextField(placeholder, text: $text)
                 .font(.custom("Avenir Next", size: 14))
                 .keyboardType(keyboard)
@@ -3548,15 +3888,17 @@ struct InputCard: View {
 
 struct UnitPillAligned: View {
     @Binding var unit: WeightUnit
+    var showsTitle: Bool = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("Unit")
-                .font(.custom("Avenir Next", size: 12))
-                .foregroundStyle(.clear)
+            if showsTitle {
+                Text("Unit")
+                    .font(.custom("Avenir Next", size: 12))
+                    .foregroundStyle(.clear)
+            }
             unitPill
         }
-        .padding(.top, 2)
     }
 
     private var unitPill: some View {
@@ -3598,14 +3940,162 @@ struct SetRemoveButtonAligned: View {
     }
 }
 
+struct SegmentRemoveButton: View {
+    let showsTitle: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(role: .destructive, action: action) {
+            Image(systemName: "minus.circle.fill")
+                .foregroundStyle(Color("Sand").opacity(0.7))
+        }
+        .frame(width: 24, height: 24)
+        .padding(.top, showsTitle ? 16 : 0)
+    }
+}
+
+struct SetDeleteAnchor: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(role: .destructive, action: action) {
+            Image(systemName: "trash")
+                .foregroundStyle(Color("Sand").opacity(0.7))
+        }
+        .frame(width: 24, height: 24)
+    }
+}
+
+struct SetCardView: View {
+    @Binding var set: WorkoutSetDraft
+    @Binding var weightUnit: WeightUnit
+    let isCompact: Bool
+    let canRemoveSet: Bool
+    let isBodyweightSegment: (WorkoutSetSegmentDraft) -> Bool
+    let onRemoveSet: () -> Void
+    @State private var segmentMidYs: [UUID: CGFloat] = [:]
+
+    private var deleteAnchorY: CGFloat? {
+        let ids = set.segments.map(\.id)
+        guard !ids.isEmpty else { return nil }
+        let count = ids.count
+        if count % 2 == 1 {
+            let midIndex = (count - 1) / 2
+            return segmentMidYs[ids[midIndex]]
+        }
+        let upperIndex = count / 2
+        let lowerIndex = upperIndex - 1
+        guard let lower = segmentMidYs[ids[lowerIndex]],
+              let upper = segmentMidYs[ids[upperIndex]] else {
+            return nil
+        }
+        return (lower + upper) / 2
+    }
+
+    var body: some View {
+        VStack(spacing: 10) {
+            VStack(spacing: 6) {
+                ForEach(Array($set.segments.enumerated()), id: \.element.id) { index, $segment in
+                    let segmentId = $segment.wrappedValue.id
+                    let showsTitle = index == 0
+                    HStack(alignment: .center, spacing: 12) {
+                        if set.segments.count > 1 {
+                            SegmentRemoveButton(showsTitle: showsTitle) {
+                                set.segments.removeAll { $0.id == segmentId }
+                            }
+                        }
+                        InputCard(
+                            title: "Reps",
+                            text: $segment.reps,
+                            placeholder: segment.repsPlaceholder.isEmpty ? "10" : segment.repsPlaceholder,
+                            keyboard: .numberPad,
+                            showsTitle: showsTitle
+                        )
+                        InputCard(
+                            title: "Weight",
+                            text: $segment.weight,
+                            placeholder: segment.weightPlaceholder.isEmpty ? "10" : segment.weightPlaceholder,
+                            keyboard: .decimalPad,
+                            showsTitle: showsTitle
+                        )
+                                if isBodyweightSegment(segment) {
+                                    BodyweightPillAligned(isCompact: isCompact, showsTitle: showsTitle)
+                                } else {
+                                    UnitPillAligned(unit: $weightUnit, showsTitle: showsTitle)
+                                }
+                        if canRemoveSet {
+                            SetDeleteAnchorSpacer()
+                        }
+                    }
+                    .background(
+                        GeometryReader { proxy in
+                            Color.clear.preference(
+                                key: SegmentMidYPreferenceKey.self,
+                                value: [segmentId: proxy.frame(in: .named("setCard")).midY]
+                            )
+                        }
+                    )
+                }
+            }
+            .onPreferenceChange(SegmentMidYPreferenceKey.self) { value in
+                segmentMidYs = value
+            }
+
+            Button {
+                set.segments.append(WorkoutSetSegmentDraft())
+            } label: {
+                HStack {
+                    Image(systemName: "plus.circle")
+                    Text("Add Drop")
+                }
+                .font(.custom("Avenir Next", size: 14))
+                .foregroundStyle(Color("Sand"))
+            }
+            .buttonStyle(.plain)
+            .frame(maxWidth: .infinity, alignment: .trailing)
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 14)
+                .fill(Color("Card").opacity(0.6))
+        )
+        .coordinateSpace(name: "setCard")
+        .overlay(alignment: .topTrailing) {
+            if canRemoveSet, let anchorY = deleteAnchorY {
+                SetDeleteAnchor(action: onRemoveSet)
+                    .offset(y: anchorY - 3)
+                    .padding(.trailing, 0)
+            }
+        }
+    }
+}
+
+struct SegmentMidYPreferenceKey: PreferenceKey {
+    static var defaultValue: [UUID: CGFloat] = [:]
+
+    static func reduce(value: inout [UUID: CGFloat], nextValue: () -> [UUID: CGFloat]) {
+        value.merge(nextValue(), uniquingKeysWith: { $1 })
+    }
+}
+
+struct SetDeleteAnchorSpacer: View {
+    var body: some View {
+        Color.clear
+            .frame(width: 24, height: 24)
+    }
+}
+
 struct BodyweightPillAligned: View {
     let isCompact: Bool
+    var showsTitle: Bool = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("Unit")
-                .font(.custom("Avenir Next", size: 12))
-                .foregroundStyle(.clear)
+            if showsTitle {
+                Text("Unit")
+                    .font(.custom("Avenir Next", size: 12))
+                    .foregroundStyle(.clear)
+            }
             Group {
                 if isCompact {
                     Text("BW")
@@ -3642,7 +4132,6 @@ struct BodyweightPillAligned: View {
             }
             .animation(.easeInOut(duration: 0.2), value: isCompact)
         }
-        .padding(.top, 2)
     }
 }
 
@@ -4060,6 +4549,7 @@ struct AddTemplateView: View {
                     suggestions: store.exerciseNameCatalog(),
                     showsMetrics: false,
                     knownType: store.exerciseType(for: draft.name),
+                    noteForName: nil,
                     onDelete: {
                         drafts.removeAll { $0.id == draft.id }
                         if drafts.isEmpty {
@@ -4176,6 +4666,7 @@ struct EditTemplateView: View {
                             suggestions: store.exerciseNameCatalog(),
                             showsMetrics: false,
                             knownType: store.exerciseType(for: draft.name),
+                            noteForName: nil,
                             onDelete: {
                                 drafts.removeAll { $0.id == draft.id }
                                 if drafts.isEmpty {
