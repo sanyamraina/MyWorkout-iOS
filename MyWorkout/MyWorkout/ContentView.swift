@@ -10,6 +10,7 @@ import Combine
 import Charts
 import UniformTypeIdentifiers
 import UIKit
+import PhotosUI
 import AVFoundation
 import CoreImage.CIFilterBuiltins
 
@@ -40,6 +41,8 @@ enum WeightUnit: String, Codable, CaseIterable {
         }
     }
 }
+
+
 
 private func formattedDurationValue(_ seconds: Int?) -> String {
     guard let seconds, seconds > 0 else { return "" }
@@ -460,10 +463,18 @@ final class WorkoutStore: ObservableObject {
     @Published var sessionMergeWindowOption: SessionMergeWindowOption = .threeHours {
         didSet { saveSessionMergeWindowOption() }
     }
+    @Published var isDropSetsEnabled: Bool = true {
+        didSet { saveDropSetsEnabled() }
+    }
+    @Published var isNotesEnabled: Bool = true {
+        didSet { saveNotesEnabled() }
+    }
 
     init() {
         defaultWeightUnit = loadDefaultWeightUnit()
         sessionMergeWindowOption = loadSessionMergeWindowOption()
+        isDropSetsEnabled = loadDropSetsEnabled()
+        isNotesEnabled = loadNotesEnabled()
         load()
     }
 
@@ -969,6 +980,13 @@ final class WorkoutStore: ObservableObject {
         return exerciseNotes[key] ?? ""
     }
 
+    func exerciseNotesList() -> [(name: String, note: String)] {
+        exerciseNotes
+            .map { (name: $0.key, note: $0.value) }
+            .filter { !$0.name.isEmpty && !$0.note.isEmpty }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
     func setNote(_ note: String, for name: String) {
         let key = normalizedExerciseKey(name)
         guard !key.isEmpty else { return }
@@ -1097,6 +1115,24 @@ final class WorkoutStore: ObservableObject {
 
     private func saveSessionMergeWindowOption() {
         UserDefaults.standard.set(sessionMergeWindowOption.rawValue, forKey: "sessionMergeWindowOption")
+    }
+
+    private func loadDropSetsEnabled() -> Bool {
+        let value = UserDefaults.standard.object(forKey: "dropSetsEnabled") as? Bool
+        return value ?? true
+    }
+
+    private func saveDropSetsEnabled() {
+        UserDefaults.standard.set(isDropSetsEnabled, forKey: "dropSetsEnabled")
+    }
+
+    private func loadNotesEnabled() -> Bool {
+        let value = UserDefaults.standard.object(forKey: "notesEnabled") as? Bool
+        return value ?? true
+    }
+
+    private func saveNotesEnabled() {
+        UserDefaults.standard.set(isNotesEnabled, forKey: "notesEnabled")
     }
 
     private static let defaultLibrary: [LibraryExercise] = [
@@ -1388,6 +1424,7 @@ struct HomeView: View {
     @State private var showTemplateImportSuccess = false
     @State private var templateSharePayload: TemplateShareSheetPayload?
     @State private var showTemplateScanner = false
+    @State private var showTemplatePhotoPicker = false
 
     var body: some View {
         ZStack {
@@ -1452,16 +1489,35 @@ struct HomeView: View {
             )
         }
         .sheet(isPresented: $showTemplateScanner) {
-            TemplateQRScanner { code in
-                showTemplateScanner = false
-                do {
-                    try store.importTemplate(from: code)
-                    showTemplateImportSuccess = true
-                } catch {
-                    templateImportErrorMessage = "Invalid template code."
+            TemplateQRScanner(
+                onScan: { code in
+                    showTemplateScanner = false
+                    do {
+                        try store.importTemplate(from: code)
+                        showTemplateImportSuccess = true
+                    } catch {
+                        templateImportErrorMessage = "Invalid template code."
+                        showTemplateImportError = true
+                    }
+                },
+                onImportPhoto: {
+                    showTemplateScanner = false
+                    showTemplatePhotoPicker = true
+                }
+            )
+        }
+        .sheet(isPresented: $showTemplatePhotoPicker) {
+            PhotoPicker(
+                onImage: { image in
+                    showTemplatePhotoPicker = false
+                    handleTemplateImageImport(image)
+                },
+                onError: { message in
+                    showTemplatePhotoPicker = false
+                    templateImportErrorMessage = message
                     showTemplateImportError = true
                 }
-            }
+            )
         }
         .alert("Import Template", isPresented: $showTemplateImport) {
             TextField("Paste template code", text: $templateImportText)
@@ -1497,6 +1553,32 @@ struct HomeView: View {
         }
     }
 
+    private func handleTemplateImageImport(_ image: UIImage) {
+        guard let code = extractQRCode(from: image) else {
+            templateImportErrorMessage = "No QR code found in that image."
+            showTemplateImportError = true
+            return
+        }
+        do {
+            try store.importTemplate(from: code)
+            showTemplateImportSuccess = true
+        } catch {
+            templateImportErrorMessage = "Invalid template code."
+            showTemplateImportError = true
+        }
+    }
+
+    private func extractQRCode(from image: UIImage) -> String? {
+        guard let ciImage = CIImage(image: image) else { return nil }
+        let detector = CIDetector(
+            ofType: CIDetectorTypeQRCode,
+            context: nil,
+            options: [CIDetectorAccuracy: CIDetectorAccuracyHigh]
+        )
+        let features = detector?.features(in: ciImage) ?? []
+        return features.compactMap { ($0 as? CIQRCodeFeature)?.messageString }.first
+    }
+
     private var header: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .center, spacing: 12) {
@@ -1518,13 +1600,81 @@ struct HomeView: View {
     }
 
     private var stats: some View {
+        let currentStreak = currentWorkoutStreak()
+        let maxStreak = maxWorkoutStreak()
         let totalSets = store.sessions.reduce(0) { total, session in
             total + session.mergedExercises().filter { $0.type == .weights }.reduce(0) { $0 + $1.sets.count }
         }
-        return HStack(spacing: 16) {
-            StatCard(title: "Workouts", value: "\(store.sessions.count)")
-            StatCard(title: "Total Sets", value: "\(totalSets)")
+        let todaySets = store.sessions
+            .filter { Calendar.current.isDateInToday($0.date) }
+            .reduce(0) { total, session in
+                total + session.mergedExercises().filter { $0.type == .weights }.reduce(0) { $0 + $1.sets.count }
+            }
+        return HStack(spacing: 12) {
+            StatPager(
+                pages: [
+                    StatPage(title: "Current Streak", value: "\(currentStreak)"),
+                    StatPage(title: "Max Streak", value: "\(maxStreak)")
+                ]
+            )
+            StatPager(
+                pages: [
+                    StatPage(title: "Today's Sets", value: "\(todaySets)"),
+                    StatPage(title: "Total Sets", value: "\(totalSets)")
+                ]
+            )
         }
+    }
+
+    private func workoutDays() -> [Date] {
+        let calendar = Calendar.current
+        let unique = Set(store.sessions.map { calendar.startOfDay(for: $0.date) })
+        return unique.sorted()
+    }
+
+    private func currentWorkoutStreak() -> Int {
+        let calendar = Calendar.current
+        let days = Set(workoutDays())
+        let today = calendar.startOfDay(for: Date())
+        let yesterday = calendar.date(byAdding: .day, value: -1, to: today)
+        let startDay: Date
+        if days.contains(today) {
+            startDay = today
+        } else if let yesterday, days.contains(yesterday) {
+            startDay = yesterday
+        } else {
+            return 0
+        }
+        var count = 0
+        var cursor = startDay
+        while days.contains(cursor) {
+            count += 1
+            guard let previous = calendar.date(byAdding: .day, value: -1, to: cursor) else { break }
+            cursor = previous
+        }
+        return count
+    }
+
+    private func maxWorkoutStreak() -> Int {
+        let calendar = Calendar.current
+        let days = workoutDays()
+        guard let first = days.first else { return 0 }
+        var maxStreak = 1
+        var currentStreak = 1
+        var previous = first
+        for day in days.dropFirst() {
+            let diff = calendar.dateComponents([.day], from: previous, to: day).day ?? 0
+            if diff == 1 {
+                currentStreak += 1
+            } else {
+                currentStreak = 1
+            }
+            if currentStreak > maxStreak {
+                maxStreak = currentStreak
+            }
+            previous = day
+        }
+        return maxStreak
     }
 
     private var templatesSection: some View {
@@ -1821,6 +1971,7 @@ struct SettingsView: View {
                         .foregroundStyle(Color("Sand"))
 
                     preferencesCard
+                    featureControlsCard
                     dataCard
                     aboutCard
                 }
@@ -1925,6 +2076,35 @@ struct SettingsView: View {
                 }
                 .pickerStyle(.segmented)
             }
+
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 18)
+                .fill(Color("Card").opacity(0.9))
+        )
+    }
+
+    private var featureControlsCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Feature Controls")
+                .font(.custom("Avenir Next", size: 14))
+                .foregroundStyle(Color("Sand").opacity(0.7))
+
+            Toggle(isOn: $store.isDropSetsEnabled) {
+                Text("Drop Sets")
+                    .font(.custom("Avenir Next", size: 16))
+                    .foregroundStyle(Color("Sand"))
+            }
+            .tint(Color("Sand"))
+
+            Toggle(isOn: $store.isNotesEnabled) {
+                Text("Notes")
+                    .font(.custom("Avenir Next", size: 16))
+                    .foregroundStyle(Color("Sand"))
+            }
+            .tint(Color("Sand"))
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -2848,6 +3028,8 @@ struct AddWorkoutView: View {
                             suggestions: store.exerciseNameCatalog(),
                             showsMetrics: true,
                             knownType: store.exerciseType(for: draft.name),
+                            isDropSetsEnabled: store.isDropSetsEnabled,
+                            isNotesEnabled: store.isNotesEnabled,
                             noteForName: store.note(for:),
                             onDelete: {
                                 drafts.removeAll { $0.id == draft.id }
@@ -2886,10 +3068,12 @@ struct AddWorkoutView: View {
                     } else {
                         store.addSession(date: workoutDate, exercises: validExercises)
                     }
-                    for draft in drafts {
-                        let name = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
-                        guard !name.isEmpty else { continue }
-                        store.setNote(draft.note, for: name)
+                    if store.isNotesEnabled {
+                        for draft in drafts {
+                            let name = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                            guard !name.isEmpty else { continue }
+                            store.setNote(draft.note, for: name)
+                        }
                     }
                     dismiss()
                 } label: {
@@ -3049,6 +3233,8 @@ struct ExerciseEditorRow: View {
     let suggestions: [String]
     let showsMetrics: Bool
     let knownType: ExerciseType?
+    let isDropSetsEnabled: Bool
+    let isNotesEnabled: Bool
     let noteForName: ((String) -> String)?
     let onDelete: () -> Void
     let onMoveUp: (() -> Void)?
@@ -3088,7 +3274,8 @@ struct ExerciseEditorRow: View {
             if let knownType {
                 draft.type = knownType
             }
-            if let noteForName, draft.note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if isNotesEnabled, let noteForName,
+               draft.note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 let note = noteForName(draft.name)
                 if !note.isEmpty {
                     draft.note = note
@@ -3111,8 +3298,6 @@ struct ExerciseEditorRow: View {
                 .foregroundStyle(Color("Sand").opacity(0.6))
             if let knownType {
                 typeBadge(for: knownType)
-            } else if draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                typePlaceholder
             } else {
                 typePicker
             }
@@ -3158,7 +3343,9 @@ struct ExerciseEditorRow: View {
                 } else {
                     cardioSection
                 }
-                notesSection
+                if isNotesEnabled {
+                    notesSection
+                }
             }
         }
     }
@@ -3172,6 +3359,7 @@ struct ExerciseEditorRow: View {
                     weightUnit: $draft.weightUnit,
                     isCompact: draft.sets.count > 1,
                     canRemoveSet: draft.sets.count > 1,
+                    allowDropSets: isDropSetsEnabled,
                     isBodyweightSegment: isBodyweightSegment,
                     onRemoveSet: {
                         draft.sets.removeAll { $0.id == setId }
@@ -3614,6 +3802,75 @@ struct StatCard: View {
     }
 }
 
+struct StatPage: Identifiable {
+    let id = UUID()
+    let title: String
+    let value: String
+}
+
+struct StatPager: View {
+    let pages: [StatPage]
+    @State private var selection = 0
+
+    private var displayIndex: Int {
+        max(0, min(selection, pages.count - 1))
+    }
+
+    var body: some View {
+        VStack(spacing: 6) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 18)
+                    .fill(Color("Card").opacity(0.8))
+                TabView(selection: $selection) {
+                    ForEach(Array(pages.enumerated()), id: \.offset) { index, page in
+                        StatPageView(page: page)
+                            .tag(index)
+                    }
+                }
+                .tabViewStyle(.page(indexDisplayMode: .never))
+            }
+            .frame(height: 104)
+
+            PageDots(count: pages.count, currentIndex: displayIndex)
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+
+struct StatPageView: View {
+    let page: StatPage
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(page.title)
+                .font(.custom("Avenir Next", size: 12))
+                .foregroundStyle(Color("Sand").opacity(0.6))
+            Text(page.value)
+                .font(.custom("Avenir Next", size: 22))
+                .fontWeight(.semibold)
+                .foregroundStyle(Color("Sand"))
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+struct PageDots: View {
+    let count: Int
+    let currentIndex: Int
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ForEach(0..<count, id: \.self) { index in
+                Circle()
+                    .fill(Color("Sand").opacity(index == currentIndex ? 0.9 : 0.35))
+                    .frame(width: index == currentIndex ? 6 : 4, height: index == currentIndex ? 6 : 4)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .center)
+    }
+}
+
 struct TagView: View {
     let text: String
 
@@ -3719,6 +3976,33 @@ struct ExerciseLibraryView: View {
     @State private var searchText = ""
     @State private var draftTemplate: WorkoutTemplate?
 
+    struct ExerciseNoteEntry: Identifiable {
+        let id = UUID()
+        let name: String
+        let note: String
+    }
+
+    private var noteEntries: [ExerciseNoteEntry] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let entries = store.exerciseNotesList().map { entry in
+            ExerciseNoteEntry(name: displayName(for: entry.name), note: entry.note)
+        }
+        guard !query.isEmpty else { return entries }
+        return entries.filter { entry in
+            entry.name.lowercased().contains(query) || entry.note.lowercased().contains(query)
+        }
+    }
+
+    private func displayName(for key: String) -> String {
+        if let match = store.exerciseLibrary.first(where: { $0.name.lowercased() == key.lowercased() }) {
+            return match.name
+        }
+        if let record = store.latestExerciseRecord(named: key) {
+            return record.exercise.name
+        }
+        return key
+    }
+
     private var groupedExercises: [MuscleGroup: [LibraryExercise]] {
         let filtered = store.exerciseLibrary.filter { exercise in
             let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -3768,6 +4052,48 @@ struct ExerciseLibraryView: View {
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)
                 .listRowInsets(EdgeInsets(top: 24, leading: 20, bottom: 6, trailing: 20))
+
+                if store.isNotesEnabled, !noteEntries.isEmpty {
+                    Section {
+                        ForEach(noteEntries) { entry in
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(entry.name)
+                                    .font(.custom("Avenir Next", size: 16))
+                                    .foregroundStyle(Color("Sand"))
+                                Text(entry.note)
+                                    .font(.custom("Avenir Next", size: 13))
+                                    .foregroundStyle(Color("Sand").opacity(0.7))
+                            }
+                            .padding(14)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(
+                                RoundedRectangle(cornerRadius: 14)
+                                    .fill(Color("Card").opacity(0.9))
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 14)
+                                            .stroke(Color("Sand").opacity(0.08), lineWidth: 1)
+                                    )
+                            )
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
+                            .listRowInsets(EdgeInsets(top: 6, leading: 20, bottom: 6, trailing: 20))
+                        }
+                    } header: {
+                        HStack(spacing: 10) {
+                            Capsule()
+                                .fill(Color("Sand").opacity(0.18))
+                                .frame(width: 18, height: 6)
+                            Text("NOTES")
+                                .font(.custom("Avenir Next", size: 13))
+                                .fontWeight(.semibold)
+                                .foregroundStyle(Color("Sand").opacity(0.75))
+                        }
+                        .padding(.top, 8)
+                    }
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets(top: 12, leading: 20, bottom: 0, trailing: 20))
+                }
 
                 ForEach(orderedGroups, id: \.self) { group in
                     Section {
@@ -3971,6 +4297,7 @@ struct SetCardView: View {
     @Binding var weightUnit: WeightUnit
     let isCompact: Bool
     let canRemoveSet: Bool
+    let allowDropSets: Bool
     let isBodyweightSegment: (WorkoutSetSegmentDraft) -> Bool
     let onRemoveSet: () -> Void
     @State private var segmentMidYs: [UUID: CGFloat] = [:]
@@ -3999,7 +4326,7 @@ struct SetCardView: View {
                     let segmentId = $segment.wrappedValue.id
                     let showsTitle = index == 0
                     HStack(alignment: .center, spacing: 12) {
-                        if set.segments.count > 1 {
+                        if allowDropSets && set.segments.count > 1 {
                             SegmentRemoveButton(showsTitle: showsTitle) {
                                 set.segments.removeAll { $0.id == segmentId }
                             }
@@ -4041,18 +4368,20 @@ struct SetCardView: View {
                 segmentMidYs = value
             }
 
-            Button {
-                set.segments.append(WorkoutSetSegmentDraft())
-            } label: {
-                HStack {
-                    Image(systemName: "plus.circle")
-                    Text("Add Drop")
+            if allowDropSets {
+                Button {
+                    set.segments.append(WorkoutSetSegmentDraft())
+                } label: {
+                    HStack {
+                        Image(systemName: "plus.circle")
+                        Text("Add Drop")
+                    }
+                    .font(.custom("Avenir Next", size: 14))
+                    .foregroundStyle(Color("Sand"))
                 }
-                .font(.custom("Avenir Next", size: 14))
-                .foregroundStyle(Color("Sand"))
+                .buttonStyle(.plain)
+                .frame(maxWidth: .infinity, alignment: .trailing)
             }
-            .buttonStyle(.plain)
-            .frame(maxWidth: .infinity, alignment: .trailing)
         }
         .padding(10)
         .background(
@@ -4248,18 +4577,9 @@ struct TemplateShareSheet: View {
                         Text("Template Code")
                             .font(.custom("Avenir Next", size: 14))
                             .foregroundStyle(Color("Sand").opacity(0.7))
-                        ScrollView {
-                            Text(code)
-                                .font(.custom("Avenir Next", size: 12))
-                                .foregroundStyle(Color("Sand"))
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(12)
-                        }
-                        .frame(maxHeight: 140)
-                        .background(
-                            RoundedRectangle(cornerRadius: 12)
-                                .fill(Color("Card").opacity(0.9))
-                        )
+                        Text("Use the button below to copy the code.")
+                            .font(.custom("Avenir Next", size: 12))
+                            .foregroundStyle(Color("Sand").opacity(0.6))
                     }
 
                     Button {
@@ -4334,8 +4654,61 @@ struct QRCodeView: View {
     }
 }
 
+struct PhotoPicker: UIViewControllerRepresentable {
+    let onImage: (UIImage) -> Void
+    let onError: (String) -> Void
+
+    func makeUIViewController(context: Context) -> PHPickerViewController {
+        var configuration = PHPickerConfiguration()
+        configuration.filter = .images
+        configuration.selectionLimit = 1
+        let picker = PHPickerViewController(configuration: configuration)
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: PHPickerViewController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onImage: onImage, onError: onError)
+    }
+
+    final class Coordinator: NSObject, PHPickerViewControllerDelegate {
+        private let onImage: (UIImage) -> Void
+        private let onError: (String) -> Void
+
+        init(onImage: @escaping (UIImage) -> Void, onError: @escaping (String) -> Void) {
+            self.onImage = onImage
+            self.onError = onError
+        }
+
+        func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
+            guard let provider = results.first?.itemProvider else {
+                onError("No image selected.")
+                return
+            }
+            guard provider.canLoadObject(ofClass: UIImage.self) else {
+                onError("Unable to load image.")
+                return
+            }
+            provider.loadObject(ofClass: UIImage.self) { object, error in
+                DispatchQueue.main.async {
+                    if let image = object as? UIImage {
+                        self.onImage(image)
+                    } else if let error {
+                        self.onError(error.localizedDescription)
+                    } else {
+                        self.onError("Unable to load image.")
+                    }
+                }
+            }
+        }
+    }
+}
+
 struct TemplateQRScanner: View {
     let onScan: (String) -> Void
+    let onImportPhoto: () -> Void
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -4363,7 +4736,15 @@ struct TemplateQRScanner: View {
                         .font(.custom("Avenir Next", size: 14))
                         .foregroundStyle(Color("Sand").opacity(0.7))
                     Spacer()
-                    Color.clear.frame(width: 44, height: 1)
+                    Button {
+                        dismiss()
+                        onImportPhoto()
+                    } label: {
+                        Image(systemName: "photo")
+                            .font(.custom("Avenir Next", size: 16))
+                            .foregroundStyle(Color("Sand"))
+                    }
+                    .frame(width: 44, height: 44)
                 }
                 .padding(.horizontal, 20)
                 .padding(.top, 20)
@@ -4549,6 +4930,8 @@ struct AddTemplateView: View {
                     suggestions: store.exerciseNameCatalog(),
                     showsMetrics: false,
                     knownType: store.exerciseType(for: draft.name),
+                    isDropSetsEnabled: store.isDropSetsEnabled,
+                    isNotesEnabled: store.isNotesEnabled,
                     noteForName: nil,
                     onDelete: {
                         drafts.removeAll { $0.id == draft.id }
@@ -4666,6 +5049,8 @@ struct EditTemplateView: View {
                             suggestions: store.exerciseNameCatalog(),
                             showsMetrics: false,
                             knownType: store.exerciseType(for: draft.name),
+                            isDropSetsEnabled: store.isDropSetsEnabled,
+                            isNotesEnabled: store.isNotesEnabled,
                             noteForName: nil,
                             onDelete: {
                                 drafts.removeAll { $0.id == draft.id }
