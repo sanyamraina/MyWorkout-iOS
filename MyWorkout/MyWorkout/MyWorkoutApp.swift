@@ -9,9 +9,12 @@ import SwiftUI
 
 @main
 struct MyWorkoutApp: App {
+    @StateObject private var themeStore = ThemeStore.shared
+
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .id(themeStore.selectedTheme)
         }
     }
 }

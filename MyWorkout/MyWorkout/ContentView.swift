@@ -42,6 +42,98 @@ enum WeightUnit: String, Codable, CaseIterable {
     }
 }
 
+enum AppTheme: String, CaseIterable, Codable, Identifiable {
+    case midnightSand
+    case studioMinimal
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .midnightSand:
+            return "Dark"
+        case .studioMinimal:
+            return "Light"
+        }
+    }
+
+    var nightAsset: String {
+        switch self {
+        case .midnightSand:
+            return "MidnightSandNight"
+        case .studioMinimal:
+            return "StudioMinimalNight"
+        }
+    }
+
+    var coalAsset: String {
+        switch self {
+        case .midnightSand:
+            return "MidnightSandCoal"
+        case .studioMinimal:
+            return "StudioMinimalCoal"
+        }
+    }
+
+    var sandAsset: String {
+        switch self {
+        case .midnightSand:
+            return "MidnightSandSand"
+        case .studioMinimal:
+            return "StudioMinimalSand"
+        }
+    }
+
+    var cardAsset: String {
+        switch self {
+        case .midnightSand:
+            return "MidnightSandCard"
+        case .studioMinimal:
+            return "StudioMinimalCard"
+        }
+    }
+}
+
+enum ThemeColorKey {
+    case night
+    case coal
+    case sand
+    case card
+}
+
+final class ThemeStore: ObservableObject {
+    static let shared = ThemeStore()
+    @Published var selectedTheme: AppTheme = .midnightSand {
+        didSet { saveTheme() }
+    }
+
+    private init() {
+        selectedTheme = loadTheme()
+    }
+
+    private func loadTheme() -> AppTheme {
+        let raw = UserDefaults.standard.string(forKey: "selectedTheme") ?? AppTheme.midnightSand.rawValue
+        return AppTheme(rawValue: raw) ?? .midnightSand
+    }
+
+    private func saveTheme() {
+        UserDefaults.standard.set(selectedTheme.rawValue, forKey: "selectedTheme")
+    }
+}
+
+private func themeColor(_ key: ThemeColorKey) -> Color {
+    let theme = ThemeStore.shared.selectedTheme
+    switch key {
+    case .night:
+        return Color(theme.nightAsset)
+    case .coal:
+        return Color(theme.coalAsset)
+    case .sand:
+        return Color(theme.sandAsset)
+    case .card:
+        return Color(theme.cardAsset)
+    }
+}
 
 
 private func formattedDurationValue(_ seconds: Int?) -> String {
@@ -1429,7 +1521,7 @@ struct HomeView: View {
     var body: some View {
         ZStack {
             LinearGradient(
-                colors: [Color("Night"), Color("Coal")],
+                colors: [themeColor(.night), themeColor(.coal)],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
@@ -1590,12 +1682,12 @@ struct HomeView: View {
                 Text("MyWorkout")
                     .font(.custom("Avenir Next", size: 34))
                     .fontWeight(.semibold)
-                    .foregroundStyle(Color("Sand"))
+                    .foregroundStyle(themeColor(.sand))
                 Spacer()
             }
             Text("Track what you lift, keep it simple.")
                 .font(.custom("Avenir Next", size: 16))
-                .foregroundStyle(Color("Sand").opacity(0.7))
+                .foregroundStyle(themeColor(.sand).opacity(0.7))
         }
     }
 
@@ -1683,7 +1775,7 @@ struct HomeView: View {
                 Text("Templates")
                     .font(.custom("Avenir Next", size: 18))
                     .fontWeight(.semibold)
-                    .foregroundStyle(Color("Sand"))
+                    .foregroundStyle(themeColor(.sand))
                 Spacer()
                 Menu {
                     Button {
@@ -1705,14 +1797,14 @@ struct HomeView: View {
                 } label: {
                     Image(systemName: "plus")
                         .font(.custom("Avenir Next", size: 16))
-                        .foregroundStyle(Color("Sand"))
+                        .foregroundStyle(themeColor(.sand))
                 }
             }
 
             if store.templates.isEmpty {
                 Text("Create a template to reuse your go-to workouts.")
                     .font(.custom("Avenir Next", size: 14))
-                    .foregroundStyle(Color("Sand").opacity(0.6))
+                    .foregroundStyle(themeColor(.sand).opacity(0.6))
             } else {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 12) {
@@ -1751,13 +1843,13 @@ struct HomeView: View {
             Text("Quick Start")
                 .font(.custom("Avenir Next", size: 18))
                 .fontWeight(.semibold)
-                .foregroundStyle(Color("Sand"))
+                .foregroundStyle(themeColor(.sand))
 
             let recentExercises = recentWorkoutExercises(limit: 8)
             if recentExercises.isEmpty {
                 Text("No exercises yet. Add a workout to start your log.")
                     .font(.custom("Avenir Next", size: 14))
-                    .foregroundStyle(Color("Sand").opacity(0.6))
+                    .foregroundStyle(themeColor(.sand).opacity(0.6))
             } else {
                 ForEach(recentExercises, id: \.self) { name in
                     Button {
@@ -1825,13 +1917,13 @@ struct HomeView: View {
             .font(.custom("Avenir Next", size: 18))
             .padding(.vertical, 12)
             .frame(maxWidth: .infinity)
-            .foregroundStyle(Color("Night"))
-            .background(Color("Sand"))
+            .foregroundStyle(themeColor(.night))
+            .background(themeColor(.sand))
             .clipShape(Capsule())
             .padding(.horizontal, 24)
             .padding(.bottom, 12)
         }
-        .background(Color("Night").opacity(0.001))
+        .background(themeColor(.night).opacity(0.001))
     }
 }
 
@@ -1844,7 +1936,7 @@ struct HistoryView: View {
         NavigationStack(path: $path) {
             ZStack {
                 LinearGradient(
-                    colors: [Color("Night"), Color("Coal")],
+                    colors: [themeColor(.night), themeColor(.coal)],
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
                 )
@@ -1888,7 +1980,7 @@ struct HistoryView: View {
                                     } label: {
                                         Label("Edit", systemImage: "pencil")
                                     }
-                                    .tint(Color("Sand"))
+                                    .tint(themeColor(.sand))
                                 }
                             }
                         }
@@ -1896,7 +1988,7 @@ struct HistoryView: View {
                         Text("History")
                             .font(.custom("Avenir Next", size: 28))
                             .fontWeight(.semibold)
-                            .foregroundStyle(Color("Sand"))
+                            .foregroundStyle(themeColor(.sand))
                     }
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
@@ -1943,6 +2035,7 @@ struct HistoryView: View {
 
 struct SettingsView: View {
     @ObservedObject var store: WorkoutStore
+    @ObservedObject private var themeStore = ThemeStore.shared
     @State private var isExporting = false
     @State private var isImporting = false
     @State private var exportDocument: BackupDocument?
@@ -1957,7 +2050,7 @@ struct SettingsView: View {
     var body: some View {
         ZStack {
             LinearGradient(
-                colors: [Color("Night"), Color("Coal")],
+                colors: [themeColor(.night), themeColor(.coal)],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
@@ -1968,7 +2061,7 @@ struct SettingsView: View {
                     Text("Settings")
                         .font(.custom("Avenir Next", size: 30))
                         .fontWeight(.semibold)
-                        .foregroundStyle(Color("Sand"))
+                        .foregroundStyle(themeColor(.sand))
 
                     preferencesCard
                     featureControlsCard
@@ -2034,22 +2127,22 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Preferences")
                 .font(.custom("Avenir Next", size: 14))
-                .foregroundStyle(Color("Sand").opacity(0.7))
+                .foregroundStyle(themeColor(.sand).opacity(0.7))
 
             VStack(alignment: .leading, spacing: 10) {
                 Text("Session Window")
                     .font(.custom("Avenir Next", size: 15))
-                    .foregroundStyle(Color("Sand"))
+                    .foregroundStyle(themeColor(.sand))
                 Text("Workouts logged within this window merge into the same session.")
                     .font(.custom("Avenir Next", size: 12))
-                    .foregroundStyle(Color("Sand").opacity(0.6))
+                    .foregroundStyle(themeColor(.sand).opacity(0.6))
                 Picker("Session Window", selection: $sessionWindowSelection) {
                     ForEach(SessionMergeWindowOption.allCases, id: \.self) { option in
                         Text(option.label).tag(option)
                     }
                 }
                 .pickerStyle(.menu)
-                .tint(Color("Sand"))
+                .tint(themeColor(.sand))
                 .onChange(of: sessionWindowSelection) { _, newValue in
                     guard !isSettingUp else { return }
                     guard newValue != store.sessionMergeWindowOption else { return }
@@ -2063,15 +2156,30 @@ struct SettingsView: View {
             }
 
             Divider()
-                .overlay(Color("Sand").opacity(0.12))
+                .overlay(themeColor(.sand).opacity(0.12))
 
             VStack(alignment: .leading, spacing: 8) {
                 Text("Default Weight Unit")
                     .font(.custom("Avenir Next", size: 15))
-                    .foregroundStyle(Color("Sand"))
+                    .foregroundStyle(themeColor(.sand))
                 Picker("Default Weight Unit", selection: $store.defaultWeightUnit) {
                     ForEach(WeightUnit.allCases, id: \.self) { unit in
                         Text(unit.label).tag(unit)
+                    }
+                }
+                .pickerStyle(.segmented)
+            }
+
+            Divider()
+                .overlay(themeColor(.sand).opacity(0.12))
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Theme")
+                    .font(.custom("Avenir Next", size: 15))
+                    .foregroundStyle(themeColor(.sand))
+                Picker("Theme", selection: $themeStore.selectedTheme) {
+                    ForEach(AppTheme.allCases, id: \.self) { theme in
+                        Text(theme.label).tag(theme)
                     }
                 }
                 .pickerStyle(.segmented)
@@ -2082,7 +2190,7 @@ struct SettingsView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 18)
-                .fill(Color("Card").opacity(0.9))
+                .fill(themeColor(.card).opacity(0.9))
         )
     }
 
@@ -2090,27 +2198,27 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Feature Controls")
                 .font(.custom("Avenir Next", size: 14))
-                .foregroundStyle(Color("Sand").opacity(0.7))
+                .foregroundStyle(themeColor(.sand).opacity(0.7))
 
             Toggle(isOn: $store.isDropSetsEnabled) {
                 Text("Drop Sets")
                     .font(.custom("Avenir Next", size: 16))
-                    .foregroundStyle(Color("Sand"))
+                    .foregroundStyle(themeColor(.sand))
             }
-            .tint(Color("Sand"))
+            .tint(themeColor(.sand))
 
             Toggle(isOn: $store.isNotesEnabled) {
                 Text("Notes")
                     .font(.custom("Avenir Next", size: 16))
-                    .foregroundStyle(Color("Sand"))
+                    .foregroundStyle(themeColor(.sand))
             }
-            .tint(Color("Sand"))
+            .tint(themeColor(.sand))
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 18)
-                .fill(Color("Card").opacity(0.9))
+                .fill(themeColor(.card).opacity(0.9))
         )
     }
 
@@ -2118,7 +2226,7 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Data")
                 .font(.custom("Avenir Next", size: 14))
-                .foregroundStyle(Color("Sand").opacity(0.7))
+                .foregroundStyle(themeColor(.sand).opacity(0.7))
 
             Button {
                 do {
@@ -2148,7 +2256,7 @@ struct SettingsView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 18)
-                .fill(Color("Card").opacity(0.9))
+                .fill(themeColor(.card).opacity(0.9))
         )
     }
 
@@ -2156,28 +2264,28 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("About")
                 .font(.custom("Avenir Next", size: 14))
-                .foregroundStyle(Color("Sand").opacity(0.7))
+                .foregroundStyle(themeColor(.sand).opacity(0.7))
             Text("MyWorkout")
                 .font(.custom("Avenir Next", size: 18))
-                .foregroundStyle(Color("Sand"))
+                .foregroundStyle(themeColor(.sand))
             Text("Track what you lift, keep it simple.")
                 .font(.custom("Avenir Next", size: 13))
-                .foregroundStyle(Color("Sand").opacity(0.7))
+                .foregroundStyle(themeColor(.sand).opacity(0.7))
             Text("Data stays on device unless you export a backup.")
                 .font(.custom("Avenir Next", size: 12))
-                .foregroundStyle(Color("Sand").opacity(0.6))
+                .foregroundStyle(themeColor(.sand).opacity(0.6))
             Text("License: MIT")
                 .font(.custom("Avenir Next", size: 12))
-                .foregroundStyle(Color("Sand").opacity(0.6))
+                .foregroundStyle(themeColor(.sand).opacity(0.6))
             Text("Version \(appVersion)")
                 .font(.custom("Avenir Next", size: 12))
-                .foregroundStyle(Color("Sand").opacity(0.6))
+                .foregroundStyle(themeColor(.sand).opacity(0.6))
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 18)
-                .fill(Color("Card").opacity(0.9))
+                .fill(themeColor(.card).opacity(0.9))
         )
     }
 
@@ -2191,10 +2299,10 @@ struct SettingsView: View {
         HStack {
             Image(systemName: systemImage)
                 .font(.custom("Avenir Next", size: 16))
-                .foregroundStyle(isDestructive ? Color.red.opacity(0.8) : Color("Sand"))
+                .foregroundStyle(isDestructive ? Color.red.opacity(0.8) : themeColor(.sand))
             Text(title)
                 .font(.custom("Avenir Next", size: 16))
-                .foregroundStyle(isDestructive ? Color.red.opacity(0.8) : Color("Sand"))
+                .foregroundStyle(isDestructive ? Color.red.opacity(0.8) : themeColor(.sand))
             Spacer()
         }
         .padding(.vertical, 10)
@@ -2278,7 +2386,7 @@ struct ProgressTabView: View {
     var body: some View {
         ZStack {
             LinearGradient(
-                colors: [Color("Night"), Color("Coal")],
+                colors: [themeColor(.night), themeColor(.coal)],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
@@ -2289,7 +2397,7 @@ struct ProgressTabView: View {
                     Text("Progress")
                         .font(.custom("Avenir Next", size: 30))
                         .fontWeight(.semibold)
-                        .foregroundStyle(Color("Sand"))
+                        .foregroundStyle(themeColor(.sand))
 
                     Picker("Range", selection: $range) {
                         ForEach(ProgressRange.allCases, id: \.self) { option in
@@ -2336,7 +2444,7 @@ struct ProgressTabView: View {
                 Text("Strength Trend")
                     .font(.custom("Avenir Next", size: 18))
                     .fontWeight(.semibold)
-                    .foregroundStyle(Color("Sand"))
+                    .foregroundStyle(themeColor(.sand))
                 Spacer()
                 if !recentExerciseNames.isEmpty {
                     Picker("Exercise", selection: $selectedExercise) {
@@ -2345,7 +2453,7 @@ struct ProgressTabView: View {
                         }
                     }
                     .pickerStyle(.menu)
-                    .tint(Color("Sand"))
+                    .tint(themeColor(.sand))
                 }
             }
 
@@ -2358,13 +2466,13 @@ struct ProgressTabView: View {
                             x: .value("Date", point.date),
                             y: .value("Weight", point.weight)
                         )
-                        .foregroundStyle(Color("Sand"))
+                        .foregroundStyle(themeColor(.sand))
 
                         PointMark(
                             x: .value("Date", point.date),
                             y: .value("Weight", point.weight)
                         )
-                        .foregroundStyle(Color("Sand"))
+                        .foregroundStyle(themeColor(.sand))
                     }
                 }
                 .frame(height: 220)
@@ -2373,7 +2481,7 @@ struct ProgressTabView: View {
                 .padding(12)
                 .background(
                     RoundedRectangle(cornerRadius: 18)
-                        .fill(Color("Card").opacity(0.9))
+                        .fill(themeColor(.card).opacity(0.9))
                 )
             }
         }
@@ -2384,7 +2492,7 @@ struct ProgressTabView: View {
             Text("Volume Trend")
                 .font(.custom("Avenir Next", size: 18))
                 .fontWeight(.semibold)
-                .foregroundStyle(Color("Sand"))
+                .foregroundStyle(themeColor(.sand))
 
             if volumePoints.isEmpty {
                 emptyCard(text: "No volume data yet.")
@@ -2395,7 +2503,7 @@ struct ProgressTabView: View {
                             x: .value("Date", point.date),
                             y: .value("Volume", point.volume)
                         )
-                        .foregroundStyle(Color("Sand").opacity(0.7))
+                        .foregroundStyle(themeColor(.sand).opacity(0.7))
                     }
                 }
                 .frame(height: 220)
@@ -2404,7 +2512,7 @@ struct ProgressTabView: View {
                 .padding(12)
                 .background(
                     RoundedRectangle(cornerRadius: 18)
-                        .fill(Color("Card").opacity(0.9))
+                        .fill(themeColor(.card).opacity(0.9))
                 )
             }
         }
@@ -2415,7 +2523,7 @@ struct ProgressTabView: View {
             Text("Workout Consistency")
                 .font(.custom("Avenir Next", size: 18))
                 .fontWeight(.semibold)
-                .foregroundStyle(Color("Sand"))
+                .foregroundStyle(themeColor(.sand))
 
             if weeklyWorkouts.isEmpty {
                 emptyCard(text: "No workouts yet.")
@@ -2426,7 +2534,7 @@ struct ProgressTabView: View {
                             x: .value("Week", point.weekStart),
                             y: .value("Workouts", point.value)
                         )
-                        .foregroundStyle(Color("Sand"))
+                        .foregroundStyle(themeColor(.sand))
                     }
                 }
                 .frame(height: 200)
@@ -2435,7 +2543,7 @@ struct ProgressTabView: View {
                 .padding(12)
                 .background(
                     RoundedRectangle(cornerRadius: 18)
-                        .fill(Color("Card").opacity(0.9))
+                        .fill(themeColor(.card).opacity(0.9))
                 )
             }
         }
@@ -2446,7 +2554,7 @@ struct ProgressTabView: View {
             Text("Cardio Trend")
                 .font(.custom("Avenir Next", size: 18))
                 .fontWeight(.semibold)
-                .foregroundStyle(Color("Sand"))
+                .foregroundStyle(themeColor(.sand))
 
             if weeklyCardio.isEmpty {
                 emptyCard(text: "No cardio yet.")
@@ -2457,13 +2565,13 @@ struct ProgressTabView: View {
                             x: .value("Week", point.weekStart),
                             y: .value("Minutes", point.minutes)
                         )
-                        .foregroundStyle(Color("Sand").opacity(0.7))
+                        .foregroundStyle(themeColor(.sand).opacity(0.7))
 
                         LineMark(
                             x: .value("Week", point.weekStart),
                             y: .value("Calories", point.calories)
                         )
-                        .foregroundStyle(Color("Sand"))
+                        .foregroundStyle(themeColor(.sand))
                     }
                 }
                 .frame(height: 200)
@@ -2472,7 +2580,7 @@ struct ProgressTabView: View {
                 .padding(12)
                 .background(
                     RoundedRectangle(cornerRadius: 18)
-                        .fill(Color("Card").opacity(0.9))
+                        .fill(themeColor(.card).opacity(0.9))
                 )
             }
         }
@@ -2483,7 +2591,7 @@ struct ProgressTabView: View {
             Text("Recent PRs")
                 .font(.custom("Avenir Next", size: 18))
                 .fontWeight(.semibold)
-                .foregroundStyle(Color("Sand"))
+                .foregroundStyle(themeColor(.sand))
 
             if prItems.isEmpty {
                 emptyCard(text: "No PRs yet.")
@@ -2494,20 +2602,20 @@ struct ProgressTabView: View {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(item.name)
                                     .font(.custom("Avenir Next", size: 16))
-                                    .foregroundStyle(Color("Sand"))
+                                    .foregroundStyle(themeColor(.sand))
                                 Text(item.date.formatted(date: .abbreviated, time: .omitted))
                                     .font(.custom("Avenir Next", size: 12))
-                                    .foregroundStyle(Color("Sand").opacity(0.6))
+                                    .foregroundStyle(themeColor(.sand).opacity(0.6))
                             }
                             Spacer()
                             Text("\(formattedWeight(item.weight, unit: store.defaultWeightUnit)) x \(item.reps)")
                                 .font(.custom("Avenir Next", size: 14))
-                                .foregroundStyle(Color("Sand"))
+                                .foregroundStyle(themeColor(.sand))
                         }
                         .padding(12)
                         .background(
                             RoundedRectangle(cornerRadius: 14)
-                                .fill(Color("Card").opacity(0.9))
+                                .fill(themeColor(.card).opacity(0.9))
                         )
                     }
                 }
@@ -2520,7 +2628,7 @@ struct ProgressTabView: View {
             Text("Exercise Focus")
                 .font(.custom("Avenir Next", size: 18))
                 .fontWeight(.semibold)
-                .foregroundStyle(Color("Sand"))
+                .foregroundStyle(themeColor(.sand))
 
             if focusItems.isEmpty {
                 emptyCard(text: "No exercise focus yet.")
@@ -2530,16 +2638,16 @@ struct ProgressTabView: View {
                         HStack {
                             Text(item.name)
                                 .font(.custom("Avenir Next", size: 16))
-                                .foregroundStyle(Color("Sand"))
+                                .foregroundStyle(themeColor(.sand))
                             Spacer()
                             Text("\(item.count) sets")
                                 .font(.custom("Avenir Next", size: 14))
-                                .foregroundStyle(Color("Sand").opacity(0.8))
+                                .foregroundStyle(themeColor(.sand).opacity(0.8))
                         }
                         .padding(12)
                         .background(
                             RoundedRectangle(cornerRadius: 14)
-                                .fill(Color("Card").opacity(0.9))
+                                .fill(themeColor(.card).opacity(0.9))
                         )
                     }
                 }
@@ -2550,12 +2658,12 @@ struct ProgressTabView: View {
     private func emptyCard(text: String) -> some View {
         Text(text)
             .font(.custom("Avenir Next", size: 14))
-            .foregroundStyle(Color("Sand").opacity(0.6))
+            .foregroundStyle(themeColor(.sand).opacity(0.6))
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 16)
-                    .fill(Color("Card").opacity(0.85))
+                    .fill(themeColor(.card).opacity(0.85))
             )
     }
 
@@ -2683,12 +2791,12 @@ struct ExerciseHistoryCard: View {
             Text(name)
                 .font(.custom("Avenir Next", size: 18))
                 .fontWeight(.semibold)
-                .foregroundStyle(Color("Sand"))
+                .foregroundStyle(themeColor(.sand))
 
             if let record {
                 Text("Last used \(record.date.formatted(date: .abbreviated, time: .omitted))")
                     .font(.custom("Avenir Next", size: 12))
-                    .foregroundStyle(Color("Sand").opacity(0.6))
+                    .foregroundStyle(themeColor(.sand).opacity(0.6))
 
                 HStack(spacing: 12) {
                     ForEach(tags(for: record.exercise), id: \.self) { tag in
@@ -2698,14 +2806,14 @@ struct ExerciseHistoryCard: View {
             } else {
                 Text("No logged workout yet")
                     .font(.custom("Avenir Next", size: 12))
-                    .foregroundStyle(Color("Sand").opacity(0.6))
+                    .foregroundStyle(themeColor(.sand).opacity(0.6))
             }
         }
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 20)
-                .fill(Color("Card").opacity(0.9))
+                .fill(themeColor(.card).opacity(0.9))
         )
     }
 
@@ -3007,7 +3115,7 @@ struct AddWorkoutView: View {
     var body: some View {
         ZStack {
             LinearGradient(
-                colors: [Color("Night"), Color("Coal")],
+                colors: [themeColor(.night), themeColor(.coal)],
                 startPoint: .top,
                 endPoint: .bottom
             )
@@ -3018,7 +3126,7 @@ struct AddWorkoutView: View {
                     Text(titleText)
                         .font(.custom("Avenir Next", size: 28))
                         .fontWeight(.semibold)
-                        .foregroundStyle(Color("Sand"))
+                        .foregroundStyle(themeColor(.sand))
 
                     datePickerCard
 
@@ -3047,7 +3155,7 @@ struct AddWorkoutView: View {
                             Text("Add Exercise")
                         }
                         .font(.custom("Avenir Next", size: 16))
-                        .foregroundStyle(Color("Sand"))
+                        .foregroundStyle(themeColor(.sand))
                     }
                 }
                 .padding(24)
@@ -3081,8 +3189,8 @@ struct AddWorkoutView: View {
                             .font(.custom("Avenir Next", size: 18))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 12)
-                            .foregroundStyle(Color("Night"))
-                            .background(Color("Sand"))
+                            .foregroundStyle(themeColor(.night))
+                            .background(themeColor(.sand))
                             .clipShape(Capsule())
                     }
                     .disabled(!canSave)
@@ -3095,10 +3203,10 @@ struct AddWorkoutView: View {
                             .font(.custom("Avenir Next", size: 18))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 12)
-                            .foregroundStyle(Color("Sand"))
+                            .foregroundStyle(themeColor(.sand))
                             .background(
                                 Capsule()
-                                    .stroke(Color("Sand").opacity(0.6), lineWidth: 1)
+                                    .stroke(themeColor(.sand).opacity(0.6), lineWidth: 1)
                             )
                     }
                 }
@@ -3107,8 +3215,8 @@ struct AddWorkoutView: View {
                 .background(
                     LinearGradient(
                         colors: [
-                            Color("Night").opacity(0.0),
-                            Color("Night").opacity(0.85)
+                            themeColor(.night).opacity(0.0),
+                            themeColor(.night).opacity(0.85)
                         ],
                         startPoint: .top,
                         endPoint: .bottom
@@ -3183,11 +3291,11 @@ struct AddWorkoutView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Date")
                 .font(.custom("Avenir Next", size: 12))
-                .foregroundStyle(Color("Sand").opacity(0.6))
+                .foregroundStyle(themeColor(.sand).opacity(0.6))
             HStack {
                 Text(relativeLabel(for: workoutDate))
                     .font(.custom("Avenir Next", size: 16))
-                    .foregroundStyle(Color("Sand"))
+                    .foregroundStyle(themeColor(.sand))
                 Spacer()
                 DatePicker(
                     "",
@@ -3200,7 +3308,7 @@ struct AddWorkoutView: View {
             .padding(12)
             .background(
                 RoundedRectangle(cornerRadius: 14)
-                    .fill(Color("Card"))
+                    .fill(themeColor(.card))
             )
         }
     }
@@ -3251,7 +3359,7 @@ struct ExerciseEditorRow: View {
         .padding(12)
         .background(
             RoundedRectangle(cornerRadius: 14)
-                .fill(Color("Card"))
+                .fill(themeColor(.card))
         )
         .zIndex(isNameFocused ? 5 : 1)
         .onAppear {
@@ -3295,7 +3403,7 @@ struct ExerciseEditorRow: View {
         HStack(alignment: .center, spacing: 12) {
             Text("Exercise")
                 .font(.custom("Avenir Next", size: 15))
-                .foregroundStyle(Color("Sand").opacity(0.6))
+                .foregroundStyle(themeColor(.sand).opacity(0.6))
             if let knownType {
                 typeBadge(for: knownType)
             } else {
@@ -3305,20 +3413,20 @@ struct ExerciseEditorRow: View {
             if let onMoveUp {
                 Button(action: onMoveUp) {
                     Image(systemName: "arrow.up")
-                        .foregroundStyle(Color("Sand").opacity(0.7))
+                        .foregroundStyle(themeColor(.sand).opacity(0.7))
                 }
             }
             if let onMoveDown {
                 Button(action: onMoveDown) {
                     Image(systemName: "arrow.down")
-                        .foregroundStyle(Color("Sand").opacity(0.7))
+                        .foregroundStyle(themeColor(.sand).opacity(0.7))
                 }
             }
             Button(role: .destructive) {
                 onDelete()
             } label: {
                 Image(systemName: "trash")
-                    .foregroundStyle(Color("Sand").opacity(0.8))
+                    .foregroundStyle(themeColor(.sand).opacity(0.8))
             }
         }
     }
@@ -3369,7 +3477,7 @@ struct ExerciseEditorRow: View {
             .animation(.easeInOut(duration: 0.2), value: draft.sets.count)
 
             Divider()
-                .overlay(Color("Sand").opacity(0.12))
+                .overlay(themeColor(.sand).opacity(0.12))
 
             Button {
                 draft.sets.append(WorkoutSetDraft())
@@ -3379,7 +3487,7 @@ struct ExerciseEditorRow: View {
                     Text("Add Set")
                 }
                 .font(.custom("Avenir Next", size: 16))
-                .foregroundStyle(Color("Sand"))
+                .foregroundStyle(themeColor(.sand))
             }
             .buttonStyle(.plain)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -3410,28 +3518,28 @@ struct ExerciseEditorRow: View {
             if draft.isNoteExpanded {
                 Text("Note")
                     .font(.custom("Avenir Next", size: 12))
-                    .foregroundStyle(Color("Sand").opacity(0.6))
+                    .foregroundStyle(themeColor(.sand).opacity(0.6))
                 ZStack(alignment: .topLeading) {
                     if trimmedNote.isEmpty {
                         Text("Add a note for next time…")
                             .font(.custom("Avenir Next", size: 13))
-                            .foregroundStyle(Color("Sand").opacity(0.4))
+                            .foregroundStyle(themeColor(.sand).opacity(0.4))
                             .padding(.top, 10)
                             .padding(.leading, 12)
                     }
                     TextEditor(text: $draft.note)
                         .font(.custom("Avenir Next", size: 13))
-                        .foregroundStyle(Color("Sand"))
+                        .foregroundStyle(themeColor(.sand))
                         .scrollContentBackground(.hidden)
                         .padding(8)
                 }
                 .frame(minHeight: 80)
                 .background(
                     RoundedRectangle(cornerRadius: 12)
-                        .fill(Color("Card").opacity(0.85))
+                        .fill(themeColor(.card).opacity(0.85))
                         .overlay(
                             RoundedRectangle(cornerRadius: 12)
-                                .stroke(Color("Sand").opacity(0.12), lineWidth: 1)
+                                .stroke(themeColor(.sand).opacity(0.12), lineWidth: 1)
                         )
                 )
 
@@ -3440,7 +3548,7 @@ struct ExerciseEditorRow: View {
                 } label: {
                     Text(trimmedNote.isEmpty ? "Hide Note" : "Done")
                         .font(.custom("Avenir Next", size: 14))
-                        .foregroundStyle(Color("Sand"))
+                        .foregroundStyle(themeColor(.sand))
                 }
                 .buttonStyle(.plain)
             } else if trimmedNote.isEmpty {
@@ -3452,24 +3560,24 @@ struct ExerciseEditorRow: View {
                         Text("Add Note")
                     }
                     .font(.custom("Avenir Next", size: 15))
-                    .foregroundStyle(Color("Sand"))
+                    .foregroundStyle(themeColor(.sand))
                 }
                 .buttonStyle(.plain)
             } else {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Note")
                         .font(.custom("Avenir Next", size: 12))
-                        .foregroundStyle(Color("Sand").opacity(0.6))
+                        .foregroundStyle(themeColor(.sand).opacity(0.6))
                     Text(trimmedNote)
                         .font(.custom("Avenir Next", size: 13))
-                        .foregroundStyle(Color("Sand"))
+                        .foregroundStyle(themeColor(.sand))
                         .lineLimit(2)
                 }
                 .padding(10)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(
                     RoundedRectangle(cornerRadius: 12)
-                        .fill(Color("Card").opacity(0.6))
+                        .fill(themeColor(.card).opacity(0.6))
                 )
 
                 Button {
@@ -3480,7 +3588,7 @@ struct ExerciseEditorRow: View {
                         Text("Edit Note")
                     }
                     .font(.custom("Avenir Next", size: 14))
-                    .foregroundStyle(Color("Sand"))
+                    .foregroundStyle(themeColor(.sand))
                 }
                 .buttonStyle(.plain)
             }
@@ -3540,24 +3648,24 @@ struct ExerciseEditorRow: View {
     private func typeBadge(for type: ExerciseType) -> some View {
         Text(type.label)
             .font(.custom("Avenir Next", size: 12))
-            .foregroundStyle(Color("Sand"))
+            .foregroundStyle(themeColor(.sand))
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
             .background(
                 Capsule()
-                    .fill(Color("Sand").opacity(0.12))
+                    .fill(themeColor(.sand).opacity(0.12))
             )
     }
 
     private var typePlaceholder: some View {
         Text("Type")
             .font(.custom("Avenir Next", size: 12))
-            .foregroundStyle(Color("Sand").opacity(0.5))
+            .foregroundStyle(themeColor(.sand).opacity(0.5))
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
             .background(
                 Capsule()
-                    .fill(Color("Sand").opacity(0.08))
+                    .fill(themeColor(.sand).opacity(0.08))
             )
     }
 }
@@ -3593,11 +3701,11 @@ struct WorkoutSessionCard: View {
                 Text("\(session.date.formatted(date: .abbreviated, time: .omitted)) • Session \(sessionNumber)")
                     .font(.custom("Avenir Next", size: 18))
                     .fontWeight(.semibold)
-                    .foregroundStyle(Color("Sand"))
+                    .foregroundStyle(themeColor(.sand))
                 Spacer()
                 Text("\(mergedExercises.count) exercises")
                     .font(.custom("Avenir Next", size: 12))
-                    .foregroundStyle(Color("Sand").opacity(0.6))
+                    .foregroundStyle(themeColor(.sand).opacity(0.6))
             }
 
             HStack(spacing: 12) {
@@ -3619,17 +3727,17 @@ struct WorkoutSessionCard: View {
                 ForEach(mergedExercises.prefix(3)) { exercise in
                     Text(sessionLine(for: exercise))
                         .font(.custom("Avenir Next", size: 12))
-                        .foregroundStyle(Color("Sand").opacity(0.6))
+                        .foregroundStyle(themeColor(.sand).opacity(0.6))
                 }
             }
         }
         .padding(16)
         .background(
             RoundedRectangle(cornerRadius: 18)
-                .fill(Color("Card"))
+                .fill(themeColor(.card))
                 .overlay(
                     RoundedRectangle(cornerRadius: 18)
-                        .stroke(Color("Sand").opacity(0.08), lineWidth: 1)
+                        .stroke(themeColor(.sand).opacity(0.08), lineWidth: 1)
                 )
         )
         .contextMenu {
@@ -3681,7 +3789,7 @@ struct SessionDetailView: View {
     var body: some View {
         ZStack {
             LinearGradient(
-                colors: [Color("Night"), Color("Coal")],
+                colors: [themeColor(.night), themeColor(.coal)],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
@@ -3692,7 +3800,7 @@ struct SessionDetailView: View {
                     Text(session.date.formatted(date: .abbreviated, time: .omitted))
                         .font(.custom("Avenir Next", size: 28))
                         .fontWeight(.semibold)
-                        .foregroundStyle(Color("Sand"))
+                        .foregroundStyle(themeColor(.sand))
 
                     ForEach(session.mergedExercises()) { exercise in
                         ExerciseDetailCard(exercise: exercise, weightUnit: weightUnit)
@@ -3708,7 +3816,7 @@ struct SessionDetailView: View {
                 Button("Edit") {
                     onEdit()
                 }
-                .foregroundStyle(Color("Sand"))
+                .foregroundStyle(themeColor(.sand))
             }
         }
     }
@@ -3724,11 +3832,11 @@ struct ExerciseDetailCard: View {
                 Text(exercise.name)
                     .font(.custom("Avenir Next", size: 18))
                     .fontWeight(.semibold)
-                    .foregroundStyle(Color("Sand"))
+                    .foregroundStyle(themeColor(.sand))
                 Spacer()
                 Text(exercise.type.label)
                     .font(.custom("Avenir Next", size: 12))
-                    .foregroundStyle(Color("Sand").opacity(0.6))
+                    .foregroundStyle(themeColor(.sand).opacity(0.6))
             }
 
             switch exercise.type {
@@ -3737,7 +3845,7 @@ struct ExerciseDetailCard: View {
                     ForEach(Array(exercise.sets.enumerated()), id: \.element.id) { index, set in
                         Text("Set \(index + 1): \(segmentLine(for: set.segments))")
                             .font(.custom("Avenir Next", size: 13))
-                            .foregroundStyle(Color("Sand").opacity(0.7))
+                            .foregroundStyle(themeColor(.sand).opacity(0.7))
                     }
                 }
             case .cardio:
@@ -3745,12 +3853,12 @@ struct ExerciseDetailCard: View {
                     if let duration = exercise.durationSeconds, duration > 0 {
                         Text("Duration: \(durationLabel(duration))")
                             .font(.custom("Avenir Next", size: 13))
-                            .foregroundStyle(Color("Sand").opacity(0.7))
+                            .foregroundStyle(themeColor(.sand).opacity(0.7))
                     }
                     if let calories = exercise.calories, calories > 0 {
                         Text("Calories: \(calories) cal")
                             .font(.custom("Avenir Next", size: 13))
-                            .foregroundStyle(Color("Sand").opacity(0.7))
+                            .foregroundStyle(themeColor(.sand).opacity(0.7))
                     }
                 }
             }
@@ -3759,10 +3867,10 @@ struct ExerciseDetailCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 18)
-                .fill(Color("Card"))
+                .fill(themeColor(.card))
                 .overlay(
                     RoundedRectangle(cornerRadius: 18)
-                        .stroke(Color("Sand").opacity(0.08), lineWidth: 1)
+                        .stroke(themeColor(.sand).opacity(0.08), lineWidth: 1)
                 )
         )
     }
@@ -3787,17 +3895,17 @@ struct StatCard: View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
                 .font(.custom("Avenir Next", size: 12))
-                .foregroundStyle(Color("Sand").opacity(0.6))
+                .foregroundStyle(themeColor(.sand).opacity(0.6))
             Text(value)
                 .font(.custom("Avenir Next", size: 22))
                 .fontWeight(.semibold)
-                .foregroundStyle(Color("Sand"))
+                .foregroundStyle(themeColor(.sand))
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 18)
-                .fill(Color("Card").opacity(0.8))
+                .fill(themeColor(.card).opacity(0.8))
         )
     }
 }
@@ -3820,7 +3928,7 @@ struct StatPager: View {
         VStack(spacing: 6) {
             ZStack {
                 RoundedRectangle(cornerRadius: 18)
-                    .fill(Color("Card").opacity(0.8))
+                    .fill(themeColor(.card).opacity(0.8))
                 TabView(selection: $selection) {
                     ForEach(Array(pages.enumerated()), id: \.offset) { index, page in
                         StatPageView(page: page)
@@ -3844,11 +3952,11 @@ struct StatPageView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text(page.title)
                 .font(.custom("Avenir Next", size: 12))
-                .foregroundStyle(Color("Sand").opacity(0.6))
+                .foregroundStyle(themeColor(.sand).opacity(0.6))
             Text(page.value)
                 .font(.custom("Avenir Next", size: 22))
                 .fontWeight(.semibold)
-                .foregroundStyle(Color("Sand"))
+                .foregroundStyle(themeColor(.sand))
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -3863,7 +3971,7 @@ struct PageDots: View {
         HStack(spacing: 6) {
             ForEach(0..<count, id: \.self) { index in
                 Circle()
-                    .fill(Color("Sand").opacity(index == currentIndex ? 0.9 : 0.35))
+                    .fill(themeColor(.sand).opacity(index == currentIndex ? 0.9 : 0.35))
                     .frame(width: index == currentIndex ? 6 : 4, height: index == currentIndex ? 6 : 4)
             }
         }
@@ -3881,9 +3989,9 @@ struct TagView: View {
             .padding(.vertical, 6)
             .background(
                 Capsule()
-                    .fill(Color("Sand").opacity(0.12))
+                    .fill(themeColor(.sand).opacity(0.12))
             )
-            .foregroundStyle(Color("Sand"))
+            .foregroundStyle(themeColor(.sand))
     }
 }
 
@@ -3909,21 +4017,21 @@ struct ExerciseNameField: View {
             if showsTitle {
                 Text(title)
                     .font(.custom("Avenir Next", size: 11))
-                    .foregroundStyle(Color("Sand").opacity(0.6))
+                    .foregroundStyle(themeColor(.sand).opacity(0.6))
             }
             ZStack(alignment: .topLeading) {
                 TextField("Bicep Curls", text: $text)
                     .font(.custom("Avenir Next", size: 18))
                     .textInputAutocapitalization(.words)
-                    .foregroundStyle(Color("Sand"))
+                    .foregroundStyle(themeColor(.sand))
                     .padding(12)
                     .background(
                         RoundedRectangle(cornerRadius: 12)
-                            .fill(Color("Card").opacity(0.8))
+                            .fill(themeColor(.card).opacity(0.8))
                             .overlay(
                                 RoundedRectangle(cornerRadius: 12)
                                     .stroke(
-                                        isFocused ? Color("Sand").opacity(0.35) : Color("Sand").opacity(0.12),
+                                        isFocused ? themeColor(.sand).opacity(0.35) : themeColor(.sand).opacity(0.12),
                                         lineWidth: 1
                                     )
                             )
@@ -3940,7 +4048,7 @@ struct ExerciseNameField: View {
                                 } label: {
                                     Text(name)
                                         .font(.custom("Avenir Next", size: 13))
-                                        .foregroundStyle(Color("Sand"))
+                                        .foregroundStyle(themeColor(.sand))
                                         .padding(.vertical, 6)
                                         .frame(maxWidth: .infinity, alignment: .leading)
                                 }
@@ -3952,10 +4060,10 @@ struct ExerciseNameField: View {
                     .frame(maxHeight: 160)
                     .background(
                         RoundedRectangle(cornerRadius: 12)
-                            .fill(Color("Card").opacity(0.98))
+                            .fill(themeColor(.card).opacity(0.98))
                             .overlay(
                                 RoundedRectangle(cornerRadius: 12)
-                                    .stroke(Color("Sand").opacity(0.12), lineWidth: 1)
+                                    .stroke(themeColor(.sand).opacity(0.12), lineWidth: 1)
                             )
                     )
                     .shadow(color: Color.black.opacity(0.25), radius: 12, x: 0, y: 8)
@@ -4021,7 +4129,7 @@ struct ExerciseLibraryView: View {
     var body: some View {
         ZStack {
             LinearGradient(
-                colors: [Color("Night"), Color("Coal")],
+                colors: [themeColor(.night), themeColor(.coal)],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
@@ -4031,15 +4139,15 @@ struct ExerciseLibraryView: View {
                 Section {
                     HStack {
                         Image(systemName: "magnifyingglass")
-                            .foregroundStyle(Color("Sand").opacity(0.6))
+                            .foregroundStyle(themeColor(.sand).opacity(0.6))
                         TextField("Search exercises", text: $searchText)
                             .font(.custom("Avenir Next", size: 16))
-                            .foregroundStyle(Color("Sand"))
+                            .foregroundStyle(themeColor(.sand))
                     }
                     .padding(12)
                     .background(
                         RoundedRectangle(cornerRadius: 14)
-                            .fill(Color("Card"))
+                            .fill(themeColor(.card))
                     )
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
@@ -4047,7 +4155,7 @@ struct ExerciseLibraryView: View {
                     Text("Explore")
                         .font(.custom("Avenir Next", size: 28))
                         .fontWeight(.semibold)
-                        .foregroundStyle(Color("Sand"))
+                        .foregroundStyle(themeColor(.sand))
                 }
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)
@@ -4059,19 +4167,19 @@ struct ExerciseLibraryView: View {
                             VStack(alignment: .leading, spacing: 6) {
                                 Text(entry.name)
                                     .font(.custom("Avenir Next", size: 16))
-                                    .foregroundStyle(Color("Sand"))
+                                    .foregroundStyle(themeColor(.sand))
                                 Text(entry.note)
                                     .font(.custom("Avenir Next", size: 13))
-                                    .foregroundStyle(Color("Sand").opacity(0.7))
+                                    .foregroundStyle(themeColor(.sand).opacity(0.7))
                             }
                             .padding(14)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .background(
                                 RoundedRectangle(cornerRadius: 14)
-                                    .fill(Color("Card").opacity(0.9))
+                                    .fill(themeColor(.card).opacity(0.9))
                                     .overlay(
                                         RoundedRectangle(cornerRadius: 14)
-                                            .stroke(Color("Sand").opacity(0.08), lineWidth: 1)
+                                            .stroke(themeColor(.sand).opacity(0.08), lineWidth: 1)
                                     )
                             )
                             .listRowBackground(Color.clear)
@@ -4081,12 +4189,12 @@ struct ExerciseLibraryView: View {
                     } header: {
                         HStack(spacing: 10) {
                             Capsule()
-                                .fill(Color("Sand").opacity(0.18))
+                                .fill(themeColor(.sand).opacity(0.18))
                                 .frame(width: 18, height: 6)
                             Text("NOTES")
                                 .font(.custom("Avenir Next", size: 13))
                                 .fontWeight(.semibold)
-                                .foregroundStyle(Color("Sand").opacity(0.75))
+                                .foregroundStyle(themeColor(.sand).opacity(0.75))
                         }
                         .padding(.top, 8)
                     }
@@ -4104,20 +4212,20 @@ struct ExerciseLibraryView: View {
                                 HStack {
                                     Text(exercise.name)
                                         .font(.custom("Avenir Next", size: 16))
-                                        .foregroundStyle(Color("Sand"))
+                                        .foregroundStyle(themeColor(.sand))
                                     Spacer()
                                     Image(systemName: "figure.strengthtraining.traditional")
                                         .font(.custom("Avenir Next", size: 14))
-                                        .foregroundStyle(Color("Sand").opacity(0.35))
+                                        .foregroundStyle(themeColor(.sand).opacity(0.35))
                                 }
                                 .padding(.vertical, 10)
                                 .padding(.horizontal, 14)
                                 .background(
                                     RoundedRectangle(cornerRadius: 14)
-                                        .fill(Color("Card").opacity(0.9))
+                                        .fill(themeColor(.card).opacity(0.9))
                                         .overlay(
                                             RoundedRectangle(cornerRadius: 14)
-                                                .stroke(Color("Sand").opacity(0.08), lineWidth: 1)
+                                                .stroke(themeColor(.sand).opacity(0.08), lineWidth: 1)
                                         )
                                 )
                             }
@@ -4129,12 +4237,12 @@ struct ExerciseLibraryView: View {
                     } header: {
                         HStack(spacing: 10) {
                             Capsule()
-                                .fill(Color("Sand").opacity(0.18))
+                                .fill(themeColor(.sand).opacity(0.18))
                                 .frame(width: 18, height: 6)
                             Text(group.rawValue.uppercased())
                                 .font(.custom("Avenir Next", size: 13))
                                 .fontWeight(.semibold)
-                                .foregroundStyle(Color("Sand").opacity(0.75))
+                                .foregroundStyle(themeColor(.sand).opacity(0.75))
                         }
                         .padding(.top, 8)
                     }
@@ -4186,22 +4294,22 @@ struct InputCard: View {
             if showsTitle {
                 Text(title)
                     .font(.custom("Avenir Next", size: 12))
-                    .foregroundStyle(Color("Sand").opacity(0.75))
+                    .foregroundStyle(themeColor(.sand).opacity(0.75))
             }
             TextField(placeholder, text: $text)
                 .font(.custom("Avenir Next", size: 14))
                 .keyboardType(keyboard)
-                .foregroundStyle(Color("Sand"))
+                .foregroundStyle(themeColor(.sand))
                 // .padding(10)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
                 .background(
                     RoundedRectangle(cornerRadius: 12)
-                        .fill(Color("Card").opacity(0.85))
+                        .fill(themeColor(.card).opacity(0.85))
                         .overlay(
                             RoundedRectangle(cornerRadius: 12)
                                 .stroke(
-                                    isFocused ? Color("Sand").opacity(0.35) : Color("Sand").opacity(0.12),
+                                    isFocused ? themeColor(.sand).opacity(0.35) : themeColor(.sand).opacity(0.12),
                                     lineWidth: 1
                                 )
                         )
@@ -4234,14 +4342,14 @@ struct UnitPillAligned: View {
         } label: {
             Text(unit.label)
                 .font(.custom("Avenir Next", size: 13))
-                .foregroundStyle(Color("Sand"))
+                .foregroundStyle(themeColor(.sand))
                 .frame(width: 44, height: 32)
                 .background(
                     Capsule()
-                        .fill(Color("Sand").opacity(0.12))
+                        .fill(themeColor(.sand).opacity(0.12))
                         .overlay(
                             Capsule()
-                                .stroke(Color("Sand").opacity(0.18), lineWidth: 1)
+                                .stroke(themeColor(.sand).opacity(0.18), lineWidth: 1)
                         )
                 )
         }
@@ -4258,7 +4366,7 @@ struct SetRemoveButtonAligned: View {
                 .foregroundStyle(.clear)
             Button(role: .destructive, action: action) {
                 Image(systemName: "minus.circle.fill")
-                    .foregroundStyle(Color("Sand").opacity(0.7))
+                    .foregroundStyle(themeColor(.sand).opacity(0.7))
             }
             .frame(width: 32, height: 32)
         }
@@ -4273,7 +4381,7 @@ struct SegmentRemoveButton: View {
     var body: some View {
         Button(role: .destructive, action: action) {
             Image(systemName: "minus.circle.fill")
-                .foregroundStyle(Color("Sand").opacity(0.7))
+                .foregroundStyle(themeColor(.sand).opacity(0.7))
         }
         .frame(width: 24, height: 24)
         .padding(.top, showsTitle ? 16 : 0)
@@ -4286,7 +4394,7 @@ struct SetDeleteAnchor: View {
     var body: some View {
         Button(role: .destructive, action: action) {
             Image(systemName: "trash")
-                .foregroundStyle(Color("Sand").opacity(0.7))
+                .foregroundStyle(themeColor(.sand).opacity(0.7))
         }
         .frame(width: 24, height: 24)
     }
@@ -4377,7 +4485,7 @@ struct SetCardView: View {
                         Text("Add Drop")
                     }
                     .font(.custom("Avenir Next", size: 14))
-                    .foregroundStyle(Color("Sand"))
+                    .foregroundStyle(themeColor(.sand))
                 }
                 .buttonStyle(.plain)
                 .frame(maxWidth: .infinity, alignment: .trailing)
@@ -4386,7 +4494,7 @@ struct SetCardView: View {
         .padding(10)
         .background(
             RoundedRectangle(cornerRadius: 14)
-                .fill(Color("Card").opacity(0.6))
+                .fill(themeColor(.card).opacity(0.6))
         )
         .coordinateSpace(name: "setCard")
         .overlay(alignment: .topTrailing) {
@@ -4429,31 +4537,31 @@ struct BodyweightPillAligned: View {
                 if isCompact {
                     Text("BW")
                         .font(.custom("Avenir Next", size: 13))
-                        .foregroundStyle(Color("Sand"))
+                        .foregroundStyle(themeColor(.sand))
                         .frame(width: 44, height: 32)
                         .background(
                             Capsule()
-                                .fill(Color("Sand").opacity(0.12))
+                                .fill(themeColor(.sand).opacity(0.12))
                                 .overlay(
                                     Capsule()
-                                        .stroke(Color("Sand").opacity(0.18), lineWidth: 1)
+                                        .stroke(themeColor(.sand).opacity(0.18), lineWidth: 1)
                                 )
                         )
                         .transition(.opacity.combined(with: .scale(scale: 0.95)))
                 } else {
                     Text("Bodyweight")
                         .font(.custom("Avenir Next", size: 13))
-                        .foregroundStyle(Color("Sand"))
+                        .foregroundStyle(themeColor(.sand))
                         .lineLimit(1)
                         .minimumScaleFactor(0.9)
                         .frame(minWidth: 88, minHeight: 32)
                         .padding(.horizontal, 12)
                         .background(
                             Capsule()
-                                .fill(Color("Sand").opacity(0.12))
+                                .fill(themeColor(.sand).opacity(0.12))
                                 .overlay(
                                     Capsule()
-                                        .stroke(Color("Sand").opacity(0.18), lineWidth: 1)
+                                        .stroke(themeColor(.sand).opacity(0.18), lineWidth: 1)
                                 )
                         )
                         .transition(.opacity.combined(with: .scale(scale: 1.02)))
@@ -4467,12 +4575,12 @@ struct BodyweightPillAligned: View {
 struct PrimaryCapsuleButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .foregroundStyle(Color("Night"))
+            .foregroundStyle(themeColor(.night))
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
             .background(
                 Capsule()
-                    .fill(Color("Sand"))
+                    .fill(themeColor(.sand))
             )
             .scaleEffect(configuration.isPressed ? 0.98 : 1)
             .animation(.easeInOut(duration: 0.12), value: configuration.isPressed)
@@ -4485,16 +4593,16 @@ struct EmptyStateView: View {
             Text("No workouts yet")
                 .font(.custom("Avenir Next", size: 20))
                 .fontWeight(.semibold)
-                .foregroundStyle(Color("Sand"))
+                .foregroundStyle(themeColor(.sand))
             Text("Add a workout or create a template to get started.")
                 .font(.custom("Avenir Next", size: 14))
-                .foregroundStyle(Color("Sand").opacity(0.6))
+                .foregroundStyle(themeColor(.sand).opacity(0.6))
         }
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 18)
-                .fill(Color("Card").opacity(0.8))
+                .fill(themeColor(.card).opacity(0.8))
         )
     }
 }
@@ -4512,21 +4620,21 @@ struct TemplateCard: View {
                 Text(template.title)
                     .font(.custom("Avenir Next", size: 16))
                     .fontWeight(.semibold)
-                    .foregroundStyle(Color("Sand"))
+                    .foregroundStyle(themeColor(.sand))
                 Text("\(template.exercises.count) exercises")
                     .font(.custom("Avenir Next", size: 12))
-                    .foregroundStyle(Color("Sand").opacity(0.7))
+                    .foregroundStyle(themeColor(.sand).opacity(0.7))
                 if let first = template.exercises.first {
                     Text("Starts with \(first.name)")
                         .font(.custom("Avenir Next", size: 12))
-                        .foregroundStyle(Color("Sand").opacity(0.6))
+                        .foregroundStyle(themeColor(.sand).opacity(0.6))
                 }
             }
             .padding(16)
             .frame(width: 220, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 18)
-                    .fill(Color("Card").opacity(0.9))
+                    .fill(themeColor(.card).opacity(0.9))
             )
         }
         .contextMenu {
@@ -4557,7 +4665,7 @@ struct TemplateShareSheet: View {
     var body: some View {
         ZStack {
             LinearGradient(
-                colors: [Color("Night"), Color("Coal")],
+                colors: [themeColor(.night), themeColor(.coal)],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
@@ -4568,7 +4676,7 @@ struct TemplateShareSheet: View {
                     Text("Share Template")
                         .font(.custom("Avenir Next", size: 26))
                         .fontWeight(.semibold)
-                        .foregroundStyle(Color("Sand"))
+                        .foregroundStyle(themeColor(.sand))
 
                     QRCodeView(text: code)
                         .frame(maxWidth: .infinity, alignment: .center)
@@ -4576,10 +4684,10 @@ struct TemplateShareSheet: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Template Code")
                             .font(.custom("Avenir Next", size: 14))
-                            .foregroundStyle(Color("Sand").opacity(0.7))
+                            .foregroundStyle(themeColor(.sand).opacity(0.7))
                         Text("Use the button below to copy the code.")
                             .font(.custom("Avenir Next", size: 12))
-                            .foregroundStyle(Color("Sand").opacity(0.6))
+                            .foregroundStyle(themeColor(.sand).opacity(0.6))
                     }
 
                     Button {
@@ -4589,8 +4697,8 @@ struct TemplateShareSheet: View {
                             .font(.custom("Avenir Next", size: 16))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 12)
-                            .foregroundStyle(Color("Night"))
-                            .background(Color("Sand"))
+                            .foregroundStyle(themeColor(.night))
+                            .background(themeColor(.sand))
                             .clipShape(Capsule())
                     }
 
@@ -4601,10 +4709,10 @@ struct TemplateShareSheet: View {
                             .font(.custom("Avenir Next", size: 16))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 12)
-                            .foregroundStyle(Color("Sand"))
+                            .foregroundStyle(themeColor(.sand))
                             .background(
                                 Capsule()
-                                    .stroke(Color("Sand").opacity(0.5), lineWidth: 1)
+                                    .stroke(themeColor(.sand).opacity(0.5), lineWidth: 1)
                             )
                     }
                 }
@@ -4634,12 +4742,12 @@ struct QRCodeView: View {
                     .frame(width: 220, height: 220)
                     .background(
                         RoundedRectangle(cornerRadius: 18)
-                            .fill(Color("Card").opacity(0.9))
+                            .fill(themeColor(.card).opacity(0.9))
                     )
             } else {
                 Text("Unable to generate QR code.")
                     .font(.custom("Avenir Next", size: 12))
-                    .foregroundStyle(Color("Sand").opacity(0.7))
+                    .foregroundStyle(themeColor(.sand).opacity(0.7))
             }
         }
     }
@@ -4716,7 +4824,7 @@ struct TemplateQRScanner: View {
             if AVCaptureDevice.default(for: .video) == nil {
                 Text("Camera unavailable on this device.")
                     .font(.custom("Avenir Next", size: 14))
-                    .foregroundStyle(Color("Sand"))
+                    .foregroundStyle(themeColor(.sand))
             } else {
                 QRScannerView { code in
                     onScan(code)
@@ -4730,11 +4838,11 @@ struct TemplateQRScanner: View {
                         dismiss()
                     }
                     .font(.custom("Avenir Next", size: 14))
-                    .foregroundStyle(Color("Sand"))
+                    .foregroundStyle(themeColor(.sand))
                     Spacer()
                     Text("Scan QR")
                         .font(.custom("Avenir Next", size: 14))
-                        .foregroundStyle(Color("Sand").opacity(0.7))
+                        .foregroundStyle(themeColor(.sand).opacity(0.7))
                     Spacer()
                     Button {
                         dismiss()
@@ -4742,7 +4850,7 @@ struct TemplateQRScanner: View {
                     } label: {
                         Image(systemName: "photo")
                             .font(.custom("Avenir Next", size: 16))
-                            .foregroundStyle(Color("Sand"))
+                            .foregroundStyle(themeColor(.sand))
                     }
                     .frame(width: 44, height: 44)
                 }
@@ -4751,7 +4859,7 @@ struct TemplateQRScanner: View {
                 Spacer()
             }
         }
-        .background(Color("Night").ignoresSafeArea())
+        .background(themeColor(.night).ignoresSafeArea())
     }
 }
 
@@ -4862,7 +4970,7 @@ struct AddTemplateView: View {
     var body: some View {
         ZStack {
             LinearGradient(
-                colors: [Color("Night"), Color("Coal")],
+                colors: [themeColor(.night), themeColor(.coal)],
                 startPoint: .top,
                 endPoint: .bottom
             )
@@ -4873,7 +4981,7 @@ struct AddTemplateView: View {
                     Text("New Template")
                         .font(.custom("Avenir Next", size: 28))
                         .fontWeight(.semibold)
-                        .foregroundStyle(Color("Sand"))
+                        .foregroundStyle(themeColor(.sand))
                         .padding(.horizontal, 24)
                         .padding(.top, 24)
 
@@ -4895,8 +5003,8 @@ struct AddTemplateView: View {
                             .font(.custom("Avenir Next", size: 18))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 12)
-                            .foregroundStyle(Color("Night"))
-                            .background(Color("Sand"))
+                            .foregroundStyle(themeColor(.night))
+                            .background(themeColor(.sand))
                             .clipShape(Capsule())
                     }
                     .disabled(!canSave)
@@ -4909,10 +5017,10 @@ struct AddTemplateView: View {
                             .font(.custom("Avenir Next", size: 18))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 12)
-                            .foregroundStyle(Color("Sand"))
+                            .foregroundStyle(themeColor(.sand))
                             .background(
                                 Capsule()
-                                    .stroke(Color("Sand").opacity(0.6), lineWidth: 1)
+                                    .stroke(themeColor(.sand).opacity(0.6), lineWidth: 1)
                             )
                     }
                 }
@@ -4963,7 +5071,7 @@ struct AddTemplateView: View {
                     Text("Add Exercise")
                 }
                 .font(.custom("Avenir Next", size: 16))
-                .foregroundStyle(Color("Sand"))
+                .foregroundStyle(themeColor(.sand))
             }
             .listRowBackground(Color.clear)
             .listRowInsets(EdgeInsets(top: 8, leading: 24, bottom: 16, trailing: 16))
@@ -5019,7 +5127,7 @@ struct EditTemplateView: View {
     var body: some View {
         ZStack {
             LinearGradient(
-                colors: [Color("Night"), Color("Coal")],
+                colors: [themeColor(.night), themeColor(.coal)],
                 startPoint: .top,
                 endPoint: .bottom
             )
@@ -5031,7 +5139,7 @@ struct EditTemplateView: View {
                         Text("Edit Template")
                             .font(.custom("Avenir Next", size: 28))
                             .fontWeight(.semibold)
-                            .foregroundStyle(Color("Sand"))
+                            .foregroundStyle(themeColor(.sand))
                     }
                     .padding(.horizontal, 24)
                     .padding(.top, 24)
@@ -5082,7 +5190,7 @@ struct EditTemplateView: View {
                             Text("Add Exercise")
                         }
                         .font(.custom("Avenir Next", size: 16))
-                        .foregroundStyle(Color("Sand"))
+                        .foregroundStyle(themeColor(.sand))
                     }
                     .listRowBackground(Color.clear)
                     .listRowInsets(EdgeInsets(top: 8, leading: 24, bottom: 16, trailing: 16))
@@ -5108,8 +5216,8 @@ struct EditTemplateView: View {
                             .font(.custom("Avenir Next", size: 18))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 12)
-                            .foregroundStyle(Color("Night"))
-                            .background(Color("Sand"))
+                            .foregroundStyle(themeColor(.night))
+                            .background(themeColor(.sand))
                             .clipShape(Capsule())
                     }
                     .disabled(!canSave)
@@ -5122,10 +5230,10 @@ struct EditTemplateView: View {
                             .font(.custom("Avenir Next", size: 18))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 12)
-                            .foregroundStyle(Color("Sand"))
+                            .foregroundStyle(themeColor(.sand))
                             .background(
                                 Capsule()
-                                    .stroke(Color("Sand").opacity(0.6), lineWidth: 1)
+                                    .stroke(themeColor(.sand).opacity(0.6), lineWidth: 1)
                             )
                     }
                 }
@@ -5143,15 +5251,15 @@ struct SearchField: View {
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: "magnifyingglass")
-                .foregroundStyle(Color("Sand").opacity(0.6))
+                .foregroundStyle(themeColor(.sand).opacity(0.6))
             TextField(placeholder, text: $text)
                 .font(.custom("Avenir Next", size: 16))
-                .foregroundStyle(Color("Sand"))
+                .foregroundStyle(themeColor(.sand))
         }
         .padding(12)
         .background(
             RoundedRectangle(cornerRadius: 14)
-                .fill(Color("Card"))
+                .fill(themeColor(.card))
         )
     }
 }
