@@ -1954,13 +1954,13 @@ struct HomeView: View {
             addButton
         }
         .sheet(isPresented: $showingAdd) {
-            AddWorkoutView(store: store, template: nil, session: nil)
+            LiveWorkoutView(store: store, template: nil)
         }
         .sheet(item: $templateFlow) { template in
             TemplateFlowView(store: store, template: template)
         }
         .sheet(item: $draftFromTemplate) { template in
-            AddWorkoutView(store: store, template: template, session: nil)
+            LiveWorkoutView(store: store, template: template)
         }
         .sheet(item: $editingSession) { session in
             AddWorkoutView(store: store, template: nil, session: session)
@@ -3446,6 +3446,541 @@ struct WorkoutSetDraft: Identifiable, Equatable {
     ) {
         self.id = id
         self.segments = segments
+    }
+}
+
+private struct DraftSelection: Identifiable {
+    let id: UUID
+    let index: Int
+}
+
+struct LiveWorkoutView: View {
+    @ObservedObject var store: WorkoutStore
+    let template: WorkoutTemplate?
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var workoutDate = Date()
+    @State private var usesManualDate = false
+    @State private var showsDateEditor = false
+    @State private var drafts: [ExerciseDraft] = []
+    @State private var newDraftIds: Set<UUID> = []
+    @State private var pendingTemplateDrafts: [ExerciseDraft] = []
+    @State private var selectedDraft: DraftSelection?
+    @State private var pendingDeleteIndex: Int?
+    @State private var showDeleteConfirm = false
+    @State private var hasLoadedDrafts = false
+
+    var body: some View {
+        ZStack {
+            LinearGradient(
+                colors: [themeColor(.night), themeColor(.coal)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .ignoresSafeArea()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("New Workout")
+                        .font(.custom("Avenir Next", size: 28))
+                        .fontWeight(.semibold)
+                        .foregroundStyle(themedPrimaryText())
+
+                    scheduleCard
+
+                    timelineSection
+                }
+                .padding(24)
+                .padding(.bottom, 140)
+            }
+        }
+        .safeAreaInset(edge: .bottom) {
+            actionBar
+        }
+        .sheet(item: $selectedDraft) { selection in
+            if drafts.indices.contains(selection.index) {
+                TemplateExerciseEntryView(
+                    store: store,
+                    workoutDate: workoutDate,
+                    usesManualTimes: false,
+                    draft: $drafts[selection.index],
+                    onSave: { updated in
+                        handleDraftSave(updated, at: selection.index)
+                    },
+                    onCancel: {
+                        handleDraftCancel(at: selection.index)
+                    }
+                )
+            }
+        }
+        .alert("Delete Exercise?", isPresented: $showDeleteConfirm) {
+            Button("Cancel", role: .cancel) {
+                pendingDeleteIndex = nil
+            }
+            Button("Delete", role: .destructive) {
+                if let index = pendingDeleteIndex, drafts.indices.contains(index) {
+                    let id = drafts[index].id
+                    drafts.remove(at: index)
+                    newDraftIds.remove(id)
+                }
+                pendingDeleteIndex = nil
+            }
+        } message: {
+            Text("This will remove the exercise from this workout.")
+        }
+        .onAppear {
+            guard !hasLoadedDrafts else { return }
+            hasLoadedDrafts = true
+            workoutDate = Date()
+            if let template {
+                pendingTemplateDrafts = store.resolvedDrafts(for: template)
+                if drafts.isEmpty, !pendingTemplateDrafts.isEmpty {
+                    startNextExercise()
+                }
+            }
+        }
+    }
+
+    private var scheduleCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Schedule")
+                .font(.custom("Avenir Next", size: 12))
+                .foregroundStyle(themedSecondaryText())
+
+            VStack(alignment: .leading, spacing: 12) {
+                Button {
+                    showsDateEditor.toggle()
+                } label: {
+                    HStack {
+                        Text(scheduleSummary)
+                            .font(.custom("Avenir Next", size: 16))
+                            .foregroundStyle(themedPrimaryText())
+                        Spacer()
+                        Image(systemName: showsDateEditor ? "chevron.up" : "chevron.down")
+                            .font(.custom("Avenir Next", size: 12))
+                            .foregroundStyle(themedSecondaryText())
+                    }
+                    .padding(14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14)
+                            .fill(themeColor(.card))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 14)
+                                    .stroke(themeColor(.sand).opacity(0.08), lineWidth: 1)
+                            )
+                    )
+                }
+                .buttonStyle(.plain)
+
+                if showsDateEditor {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Toggle(isOn: $usesManualDate) {
+                            Text("Use specific date")
+                                .font(.custom("Avenir Next", size: 13))
+                                .foregroundStyle(themedPrimaryText())
+                        }
+                        .tint(themedAccent())
+                        .onChange(of: usesManualDate) { _, newValue in
+                            if !newValue {
+                                workoutDate = Date()
+                            }
+                        }
+
+                        if usesManualDate {
+                            HStack {
+                                Text(relativeLabel(for: workoutDate))
+                                    .font(.custom("Avenir Next", size: 16))
+                                    .foregroundStyle(themedPrimaryText())
+                                Spacer()
+                                DatePicker(
+                                    "",
+                                    selection: $workoutDate,
+                                    displayedComponents: [.date]
+                                )
+                                .labelsHidden()
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(14)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14)
+                            .fill(themeColor(.card))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 14)
+                                    .stroke(themeColor(.sand).opacity(0.08), lineWidth: 1)
+                            )
+                    )
+
+                    if usesManualDate, isFutureDay(workoutDate) {
+                        Text("Future date")
+                            .font(.custom("Avenir Next", size: 11))
+                            .foregroundStyle(themedSecondaryText())
+                    }
+                }
+            }
+        }
+    }
+
+    private var timelineSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Timeline")
+                .font(.custom("Avenir Next", size: 18))
+                .fontWeight(.semibold)
+                .foregroundStyle(themedPrimaryText())
+
+            if completedIndices.isEmpty {
+                emptyCard(text: "No exercises yet.")
+            } else {
+                VStack(spacing: 10) {
+                    ForEach(completedIndices, id: \.self) { index in
+                        if let exercise = workoutExercise(from: drafts[index]) {
+                            Button {
+                                selectedDraft = DraftSelection(id: drafts[index].id, index: index)
+                            } label: {
+                                ExerciseTimelineCard(
+                                    exercise: exercise,
+                                    weightUnit: store.defaultWeightUnit,
+                                    timestamp: drafts[index].loggedAt
+                                )
+                            }
+                            .buttonStyle(.plain)
+                            .contextMenu {
+                                Button(role: .destructive) {
+                                    pendingDeleteIndex = index
+                                    showDeleteConfirm = true
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Button {
+                startNextExercise()
+            } label: {
+                HStack {
+                    Image(systemName: "plus.circle")
+                    Text("Next Exercise")
+                }
+                .font(.custom("Avenir Next", size: 16))
+                .foregroundStyle(themedPrimaryText())
+            }
+            .buttonStyle(.plain)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var actionBar: some View {
+        VStack(spacing: 10) {
+            Button {
+                finishWorkout()
+            } label: {
+                Text("Finish Workout")
+                    .font(.custom("Avenir Next", size: 18))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .foregroundStyle(themedAccentForeground())
+                    .background(themeColor(.sand))
+                    .clipShape(Capsule())
+            }
+            .disabled(completedIndices.isEmpty)
+            .opacity(completedIndices.isEmpty ? 0.4 : 1)
+
+            Button {
+                dismiss()
+            } label: {
+                Text("Cancel")
+                    .font(.custom("Avenir Next", size: 18))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .foregroundStyle(themedPrimaryText())
+                    .background(
+                        Capsule()
+                            .stroke(themedAccentMuted(), lineWidth: 1)
+                    )
+            }
+        }
+        .padding(.horizontal, 24)
+        .padding(.bottom, 12)
+        .background(
+            LinearGradient(
+                colors: [
+                    themeColor(.night).opacity(0.0),
+                    themeColor(.night).opacity(0.85)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .ignoresSafeArea()
+        )
+    }
+
+    private var completedIndices: [Int] {
+        drafts.indices.filter { !newDraftIds.contains(drafts[$0].id) }
+    }
+
+    private func startNextExercise() {
+        let draft: ExerciseDraft
+        if !pendingTemplateDrafts.isEmpty {
+            draft = pendingTemplateDrafts.removeFirst()
+        } else {
+            draft = ExerciseDraft(weightUnit: store.defaultWeightUnit)
+        }
+        drafts.append(draft)
+        newDraftIds.insert(draft.id)
+        selectedDraft = DraftSelection(id: draft.id, index: drafts.count - 1)
+    }
+
+    private func handleDraftSave(_ draft: ExerciseDraft, at index: Int) {
+        guard drafts.indices.contains(index) else { return }
+        var updated = draft
+        if updated.entryId == nil {
+            updated.entryId = draft.id
+        }
+        drafts[index] = updated
+        newDraftIds.remove(updated.id)
+    }
+
+    private func handleDraftCancel(at index: Int) {
+        guard drafts.indices.contains(index) else { return }
+        let draftId = drafts[index].id
+        guard newDraftIds.contains(draftId) else { return }
+        drafts.remove(at: index)
+        newDraftIds.remove(draftId)
+    }
+
+    private func finishWorkout() {
+        let exercises = completedIndices.compactMap { index -> WorkoutExercise? in
+            guard let exercise = workoutExercise(from: drafts[index]) else { return nil }
+            let adjustedLoggedAt = adjustedDate(exercise.loggedAt)
+            return WorkoutExercise(
+                id: exercise.id,
+                name: exercise.name,
+                type: exercise.type,
+                sets: exercise.sets,
+                durationSeconds: exercise.durationSeconds,
+                calories: exercise.calories,
+                loggedAt: adjustedLoggedAt,
+                exerciseEntry: exercise.exerciseEntry
+            )
+        }
+        guard !exercises.isEmpty else { return }
+        store.addSession(date: sessionDate(from: exercises), exercises: exercises)
+        if store.isExerciseNotesEnabled {
+            for index in completedIndices {
+                let draft = drafts[index]
+                let name = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !name.isEmpty else { continue }
+                store.setExerciseNote(draft.exerciseNote, for: name)
+            }
+        }
+        dismiss()
+    }
+
+    private func adjustedDate(_ date: Date?) -> Date? {
+        guard let date else { return nil }
+        guard usesManualDate else { return date }
+        return combineDate(workoutDate, time: date)
+    }
+
+    private func sessionDate(from exercises: [WorkoutExercise]) -> Date {
+        exercises.map(\.loggedAt).compactMap { $0 }.min() ?? workoutDate
+    }
+
+    private func relativeLabel(for date: Date) -> String {
+        if Calendar.current.isDateInToday(date) {
+            return "Today"
+        }
+        if Calendar.current.isDateInYesterday(date) {
+            return "Yesterday"
+        }
+        if Calendar.current.isDateInTomorrow(date) {
+            return "Tomorrow"
+        }
+        return date.formatted(date: .abbreviated, time: .omitted)
+    }
+
+    private var scheduleSummary: String {
+        if usesManualDate == false {
+            return "\(relativeLabel(for: Date())) · Live"
+        }
+        return relativeLabel(for: workoutDate)
+    }
+
+    private func workoutExercise(from draft: ExerciseDraft) -> WorkoutExercise? {
+        let name = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return nil }
+        switch draft.type {
+        case .weights:
+            var setModels: [WorkoutSet] = []
+
+            for setDraft in draft.sets {
+                var segmentModels: [WorkoutSetSegment] = []
+
+                for segment in setDraft.segments {
+                    let weightText = segment.weight.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let repsText = segment.reps.trimmingCharacters(in: .whitespacesAndNewlines)
+
+                    if weightText.isEmpty && repsText.isEmpty {
+                        continue
+                    }
+
+                    guard let inputValue = Double(weightText),
+                          let repsValue = Int(repsText) else {
+                        continue
+                    }
+
+                    let weightValue = draft.weightUnit == .lb ? inputValue * 0.45359237 : inputValue
+                    guard repsValue > 0, weightValue >= 0 else {
+                        continue
+                    }
+
+                    segmentModels.append(
+                        WorkoutSetSegment(
+                            id: UUID(),
+                            weightKg: weightValue,
+                            reps: repsValue,
+                            isSpotted: segment.isSpotted
+                        )
+                    )
+                }
+
+                guard !segmentModels.isEmpty else {
+                    continue
+                }
+
+                setModels.append(WorkoutSet(id: setDraft.id, segments: segmentModels))
+            }
+
+            guard !setModels.isEmpty else { return nil }
+
+            return WorkoutExercise(
+                id: draft.entryId ?? UUID(),
+                name: name,
+                type: .weights,
+                sets: setModels,
+                durationSeconds: nil,
+                calories: nil,
+                loggedAt: draft.loggedAt,
+                exerciseEntry: draft.exerciseEntry
+            )
+        case .cardio:
+            let durationTrimmed = draft.durationMinutes.trimmingCharacters(in: .whitespacesAndNewlines)
+            let caloriesTrimmed = draft.calories.trimmingCharacters(in: .whitespacesAndNewlines)
+            let durationValue = durationTrimmed.isEmpty ? nil : parseDurationSeconds(durationTrimmed)
+            let caloriesValue = caloriesTrimmed.isEmpty ? nil : Int(caloriesTrimmed)
+            let hasMetrics = durationValue != nil || caloriesValue != nil
+
+            guard hasMetrics else { return nil }
+
+            return WorkoutExercise(
+                id: draft.entryId ?? UUID(),
+                name: name,
+                type: .cardio,
+                sets: [],
+                durationSeconds: durationValue,
+                calories: caloriesValue,
+                loggedAt: draft.loggedAt,
+                exerciseEntry: draft.exerciseEntry
+            )
+        }
+    }
+
+    private func parseDurationSeconds(_ text: String) -> Int? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleaned = trimmed.filter { !$0.isWhitespace }
+        guard !cleaned.isEmpty else { return nil }
+        if cleaned.contains(":") {
+            let parts = cleaned.split(separator: ":")
+            guard parts.count == 2,
+                  let minutes = Int(parts[0]),
+                  let seconds = Int(parts[1]),
+                  minutes >= 0,
+                  seconds >= 0,
+                  seconds < 60 else {
+                return nil
+            }
+            return minutes * 60 + seconds
+        }
+        guard let minutes = Int(cleaned), minutes >= 0 else { return nil }
+        return minutes * 60
+    }
+
+    private func emptyCard(text: String) -> some View {
+        Text(text)
+            .font(.custom("Avenir Next", size: DesignSystem.FontSize.body))
+            .foregroundStyle(themedSecondaryText())
+            .padding(DesignSystem.Spacing.lg)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .cardBackground(cornerRadius: DesignSystem.CornerRadius.lg, opacity: 1.0)
+    }
+}
+
+struct ExerciseTimelineCard: View {
+    let exercise: WorkoutExercise
+    let weightUnit: WeightUnit
+    let timestamp: Date?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(exercise.name)
+                        .font(.custom("Avenir Next", size: 16))
+                        .foregroundStyle(themedPrimaryText())
+                    Text(exercise.type.label)
+                        .font(.custom("Avenir Next", size: 12))
+                        .foregroundStyle(themedSecondaryText())
+                }
+                Spacer()
+                if let timestamp {
+                    Text(timestamp.formatted(date: .abbreviated, time: .shortened))
+                        .font(.custom("Avenir Next", size: 12))
+                        .foregroundStyle(themedSecondaryText())
+                }
+            }
+
+            Text(detailLine)
+                .font(.custom("Avenir Next", size: 12))
+                .foregroundStyle(themedSecondaryText())
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 14)
+                .fill(themeColor(.card).opacity(0.9))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14)
+                        .stroke(themeColor(.sand).opacity(0.08), lineWidth: 1)
+                )
+        )
+    }
+
+    private var detailLine: String {
+        switch exercise.type {
+        case .weights:
+            let setCount = exercise.sets.count
+            if setCount == 0 {
+                return "Weights"
+            }
+            let maxWeight = exercise.allSegments.map(\.weightKg).max() ?? 0
+            let maxReps = exercise.allSegments.map(\.reps).max() ?? 0
+            let weightLabel = maxWeight == 0 ? "Bodyweight" : "Max \(formattedWeight(maxWeight, unit: weightUnit))"
+            return "\(setCount) sets · \(weightLabel) · Max \(maxReps) reps"
+        case .cardio:
+            var details: [String] = []
+            if let duration = exercise.durationSeconds, duration > 0 {
+                details.append(durationLabel(duration))
+            }
+            if let calories = exercise.calories, calories > 0 {
+                details.append("\(calories) cal")
+            }
+            return details.isEmpty ? "Cardio" : details.joined(separator: " · ")
+        }
     }
 }
 
@@ -5152,7 +5687,7 @@ struct TemplateExerciseEntryView: View {
             if !isKeyboardVisible {
                 VStack(spacing: 10) {
                     Button {
-                        if usesManualTimes == false {
+                        if usesManualTimes == false, draft.loggedAt == nil {
                             draft.loggedAt = combineDate(workoutDate, time: Date())
                         }
                         didSave = true
@@ -6709,7 +7244,7 @@ struct ExerciseLibraryView: View {
             .scrollContentBackground(.hidden)
         }
         .sheet(item: $draftTemplate) { template in
-            AddWorkoutView(store: store, template: template, session: nil)
+            LiveWorkoutView(store: store, template: template)
         }
     }
 
