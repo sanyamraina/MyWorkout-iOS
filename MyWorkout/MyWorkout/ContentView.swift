@@ -135,6 +135,34 @@ private func themeColor(_ key: ThemeColorKey) -> Color {
     }
 }
 
+private func themedPrimaryText() -> Color {
+    themeColor(.sand)
+}
+
+private func themedSecondaryText() -> Color {
+    ThemeStore.shared.selectedTheme == .studioMinimal
+        ? themeColor(.sand).opacity(0.7)
+        : themeColor(.sand).opacity(0.6)
+}
+
+private func themedAccent() -> Color {
+    themeColor(.sand)
+}
+
+private func themedAccentMuted() -> Color {
+    ThemeStore.shared.selectedTheme == .studioMinimal
+        ? themeColor(.sand).opacity(0.65)
+        : themeColor(.sand).opacity(0.7)
+}
+
+private func themedAccentForeground() -> Color {
+    ThemeStore.shared.selectedTheme == .studioMinimal ? themeColor(.coal) : themeColor(.night)
+}
+
+private func dismissKeyboard() {
+    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+}
+
 private func combineDate(_ date: Date, time: Date) -> Date {
     let calendar = Calendar.current
     let timeComponents = calendar.dateComponents([.hour, .minute, .second], from: time)
@@ -265,6 +293,7 @@ struct WorkoutExercise: Identifiable, Codable, Equatable {
     let durationSeconds: Int?
     let calories: Int?
     let loggedAt: Date?
+    let exerciseEntry: String?
 
     init(
         id: UUID,
@@ -273,7 +302,8 @@ struct WorkoutExercise: Identifiable, Codable, Equatable {
         sets: [WorkoutSet],
         durationSeconds: Int? = nil,
         calories: Int? = nil,
-        loggedAt: Date? = nil
+        loggedAt: Date? = nil,
+        exerciseEntry: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -282,6 +312,7 @@ struct WorkoutExercise: Identifiable, Codable, Equatable {
         self.durationSeconds = durationSeconds
         self.calories = calories
         self.loggedAt = loggedAt
+        self.exerciseEntry = exerciseEntry
     }
 
     init(from decoder: Decoder) throws {
@@ -308,6 +339,7 @@ struct WorkoutExercise: Identifiable, Codable, Equatable {
         }
         calories = try container.decodeIfPresent(Int.self, forKey: .calories)
         loggedAt = try container.decodeIfPresent(Date.self, forKey: .loggedAt)
+        exerciseEntry = try container.decodeIfPresent(String.self, forKey: .exerciseEntry)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -319,6 +351,7 @@ struct WorkoutExercise: Identifiable, Codable, Equatable {
         try container.encodeIfPresent(durationSeconds, forKey: .durationSeconds)
         try container.encodeIfPresent(calories, forKey: .calories)
         try container.encodeIfPresent(loggedAt, forKey: .loggedAt)
+        try container.encodeIfPresent(exerciseEntry, forKey: .exerciseEntry)
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -332,6 +365,7 @@ struct WorkoutExercise: Identifiable, Codable, Equatable {
         case durationSeconds
         case calories
         case loggedAt
+        case exerciseEntry
     }
 }
 
@@ -339,6 +373,37 @@ struct WorkoutSetSegment: Identifiable, Codable, Equatable {
     let id: UUID
     let weightKg: Double
     let reps: Int
+    let isSpotted: Bool
+
+    init(id: UUID, weightKg: Double, reps: Int, isSpotted: Bool = false) {
+        self.id = id
+        self.weightKg = weightKg
+        self.reps = reps
+        self.isSpotted = isSpotted
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        weightKg = try container.decode(Double.self, forKey: .weightKg)
+        reps = try container.decode(Int.self, forKey: .reps)
+        isSpotted = try container.decodeIfPresent(Bool.self, forKey: .isSpotted) ?? false
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(weightKg, forKey: .weightKg)
+        try container.encode(reps, forKey: .reps)
+        try container.encode(isSpotted, forKey: .isSpotted)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case weightKg
+        case reps
+        case isSpotted
+    }
 }
 
 struct WorkoutSet: Identifiable, Codable, Equatable {
@@ -482,6 +547,20 @@ extension WorkoutSession {
     func mergedExercises() -> [WorkoutExercise] {
         var orderedKeys: [String] = []
         var mergedByKey: [String: WorkoutExercise] = [:]
+        func mergedEntryNote(_ existing: String?, _ incoming: String?) -> String? {
+            let trimmedExisting = existing?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let trimmedIncoming = incoming?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if trimmedExisting.isEmpty && trimmedIncoming.isEmpty {
+                return nil
+            }
+            if trimmedExisting.isEmpty {
+                return trimmedIncoming
+            }
+            if trimmedIncoming.isEmpty || trimmedIncoming == trimmedExisting {
+                return trimmedExisting
+            }
+            return "\(trimmedExisting)\n\(trimmedIncoming)"
+        }
 
         for exercise in exercises {
             let key = "\(exercise.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())|\(exercise.type.rawValue)"
@@ -497,7 +576,8 @@ extension WorkoutSession {
                         sets: combinedSets,
                         durationSeconds: nil,
                         calories: nil,
-                        loggedAt: mergedLoggedAt
+                        loggedAt: mergedLoggedAt,
+                        exerciseEntry: mergedEntryNote(existing.exerciseEntry, exercise.exerciseEntry)
                     )
                 case .cardio:
                     let currentSeconds = existing.durationSeconds ?? 0
@@ -514,7 +594,8 @@ extension WorkoutSession {
                         sets: [],
                         durationSeconds: totalSeconds > 0 ? totalSeconds : nil,
                         calories: totalCalories > 0 ? totalCalories : nil,
-                        loggedAt: mergedLoggedAt
+                        loggedAt: mergedLoggedAt,
+                        exerciseEntry: mergedEntryNote(existing.exerciseEntry, exercise.exerciseEntry)
                     )
                 }
             } else {
@@ -590,33 +671,54 @@ final class WorkoutStore: ObservableObject {
     @Published var isDropSetsEnabled: Bool = true {
         didSet { saveDropSetsEnabled() }
     }
-    @Published var isNotesEnabled: Bool = true {
-        didSet { saveNotesEnabled() }
+    @Published var isExerciseNotesEnabled: Bool = true {
+        didSet { saveExerciseNotesEnabled() }
+    }
+    @Published var isExerciseEntryEnabled: Bool = true {
+        didSet { saveExerciseEntryEnabled() }
+    }
+    @Published var isSpottingEnabled: Bool = true {
+        didSet { saveSpottingEnabled() }
     }
 
     init() {
         defaultWeightUnit = loadDefaultWeightUnit()
         sessionMergeWindowOption = loadSessionMergeWindowOption()
         isDropSetsEnabled = loadDropSetsEnabled()
-        isNotesEnabled = loadNotesEnabled()
+        isExerciseNotesEnabled = loadExerciseNotesEnabled()
+        isExerciseEntryEnabled = loadExerciseEntryEnabled()
+        isSpottingEnabled = loadSpottingEnabled()
         templateUsage = loadTemplateUsage()
         load()
     }
+
+    private func normalizedTitleCase(_ value: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return trimmed }
+        return trimmed.lowercased().capitalized
+    }
+
+    private func normalizedExerciseName(_ name: String) -> String {
+        normalizedTitleCase(name)
+    }
+
+
 
     func addSession(date: Date, exercises: [WorkoutExercise]) {
         let newEntries = exercises.map { exercise in
             WorkoutExercise(
                 id: exercise.id,
-                name: exercise.name,
+                name: normalizedExerciseName(exercise.name),
                 type: exercise.type,
                 sets: exercise.sets,
                 durationSeconds: exercise.durationSeconds,
                 calories: exercise.calories,
-                loggedAt: exercise.loggedAt ?? date
+                loggedAt: exercise.loggedAt ?? date,
+                exerciseEntry: exercise.exerciseEntry
             )
         }
         entries.append(contentsOf: newEntries)
-        updateExerciseTypes(from: exercises)
+        updateExerciseTypes(from: newEntries)
         saveEntries()
         refreshSessions()
     }
@@ -644,7 +746,8 @@ final class WorkoutStore: ObservableObject {
                         sets: combinedSets,
                         durationSeconds: nil,
                         calories: nil,
-                        loggedAt: mergedLoggedAt(current: current, incoming: exercise)
+                        loggedAt: mergedLoggedAt(current: current, incoming: exercise),
+                        exerciseEntry: mergedExerciseEntry(current: current, incoming: exercise)
                     )
                 case .cardio:
                     let currentSeconds = current.durationSeconds ?? 0
@@ -660,7 +763,8 @@ final class WorkoutStore: ObservableObject {
                         sets: [],
                         durationSeconds: totalSeconds > 0 ? totalSeconds : nil,
                         calories: totalCalories > 0 ? totalCalories : nil,
-                        loggedAt: mergedLoggedAt(current: current, incoming: exercise)
+                        loggedAt: mergedLoggedAt(current: current, incoming: exercise),
+                        exerciseEntry: mergedExerciseEntry(current: current, incoming: exercise)
                     )
                 }
             } else {
@@ -679,6 +783,21 @@ final class WorkoutStore: ObservableObject {
 
     private func mergedLoggedAt(current: WorkoutExercise, incoming: WorkoutExercise) -> Date? {
         [current.loggedAt, incoming.loggedAt].compactMap { $0 }.min()
+    }
+
+    private func mergedExerciseEntry(current: WorkoutExercise, incoming: WorkoutExercise) -> String? {
+        let currentEntry = current.exerciseEntry?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let incomingEntry = incoming.exerciseEntry?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if currentEntry.isEmpty && incomingEntry.isEmpty {
+            return nil
+        }
+        if currentEntry.isEmpty {
+            return incomingEntry
+        }
+        if incomingEntry.isEmpty || incomingEntry == currentEntry {
+            return currentEntry
+        }
+        return "\(currentEntry)\n\(incomingEntry)"
     }
 
     private func closestSessionIndex(
@@ -801,7 +920,8 @@ final class WorkoutStore: ObservableObject {
             sets: exercise.sets,
             durationSeconds: exercise.durationSeconds,
             calories: exercise.calories,
-            loggedAt: loggedAt
+            loggedAt: loggedAt,
+            exerciseEntry: exercise.exerciseEntry
         )
     }
 
@@ -811,16 +931,17 @@ final class WorkoutStore: ObservableObject {
         let newEntries = exercises.map { exercise in
             WorkoutExercise(
                 id: exercise.id,
-                name: exercise.name,
+                name: normalizedExerciseName(exercise.name),
                 type: exercise.type,
                 sets: exercise.sets,
                 durationSeconds: exercise.durationSeconds,
                 calories: exercise.calories,
-                loggedAt: exercise.loggedAt ?? date
+                loggedAt: exercise.loggedAt ?? date,
+                exerciseEntry: exercise.exerciseEntry
             )
         }
         entries.append(contentsOf: newEntries)
-        updateExerciseTypes(from: exercises)
+        updateExerciseTypes(from: newEntries)
         saveEntries()
         refreshSessions()
     }
@@ -832,14 +953,37 @@ final class WorkoutStore: ObservableObject {
         refreshSessions()
     }
 
+    func removeExercise(_ exercise: WorkoutExercise, from session: WorkoutSession) {
+        let targetKey = exerciseMergeKey(for: exercise)
+        let removeIds = session.exercises
+            .filter { exerciseMergeKey(for: $0) == targetKey }
+            .map(\.id)
+        let removeSet = Set(removeIds)
+        guard !removeSet.isEmpty else { return }
+        entries.removeAll { removeSet.contains($0.id) }
+        saveEntries()
+        refreshSessions()
+    }
+
     func addTemplate(title: String, exercises: [TemplateExercise]) {
+        let normalizedTitle = normalizedTitleCase(title)
+        let normalizedExercises = exercises.map { exercise in
+            TemplateExercise(
+                id: exercise.id,
+                name: normalizedExerciseName(exercise.name),
+                type: exercise.type,
+                weightKg: exercise.weightKg,
+                sets: exercise.sets,
+                repsPerSet: exercise.repsPerSet
+            )
+        }
         let template = WorkoutTemplate(
             id: UUID(),
-            title: title,
-            exercises: exercises
+            title: normalizedTitle,
+            exercises: normalizedExercises
         )
         templates.insert(template, at: 0)
-        updateExerciseTypes(from: exercises)
+        updateExerciseTypes(from: normalizedExercises)
         saveTemplates()
         saveTemplateUsage()
     }
@@ -864,8 +1008,19 @@ final class WorkoutStore: ObservableObject {
 
     func updateTemplate(id: UUID, title: String, exercises: [TemplateExercise]) {
         guard let index = templates.firstIndex(where: { $0.id == id }) else { return }
-        templates[index] = WorkoutTemplate(id: id, title: title, exercises: exercises)
-        updateExerciseTypes(from: exercises)
+        let normalizedTitle = normalizedTitleCase(title)
+        let normalizedExercises = exercises.map { exercise in
+            TemplateExercise(
+                id: exercise.id,
+                name: normalizedExerciseName(exercise.name),
+                type: exercise.type,
+                weightKg: exercise.weightKg,
+                sets: exercise.sets,
+                repsPerSet: exercise.repsPerSet
+            )
+        }
+        templates[index] = WorkoutTemplate(id: id, title: normalizedTitle, exercises: normalizedExercises)
+        updateExerciseTypes(from: normalizedExercises)
         saveTemplates()
     }
 
@@ -922,7 +1077,7 @@ final class WorkoutStore: ObservableObject {
                         calories: "",
                         durationPlaceholder: duration,
                         caloriesPlaceholder: calories,
-                        note: note(for: trimmedName)
+                        exerciseNote: exerciseNote(for: trimmedName)
                     )
                 case .weights:
                     if latest.exercise.type == .weights {
@@ -934,7 +1089,9 @@ final class WorkoutStore: ObservableObject {
                                     weightPlaceholder: segment.weightKg == 0
                                         ? "0"
                                         : String(format: "%.1f", weightValue(segment.weightKg, unit: defaultWeightUnit)),
-                                    repsPlaceholder: "\(segment.reps)"
+                                    repsPlaceholder: "\(segment.reps)",
+                                    isSpotted: false,
+                                    isSpottedPlaceholder: segment.isSpotted
                                 )
                             }
                             return WorkoutSetDraft(segments: segmentDrafts.isEmpty ? [WorkoutSetSegmentDraft()] : segmentDrafts)
@@ -944,7 +1101,7 @@ final class WorkoutStore: ObservableObject {
                             type: .weights,
                             sets: setDrafts.isEmpty ? [WorkoutSetDraft()] : setDrafts,
                             weightUnit: defaultWeightUnit,
-                            note: note(for: latest.exercise.name)
+                            exerciseNote: exerciseNote(for: latest.exercise.name)
                         )
                     }
                 }
@@ -954,7 +1111,7 @@ final class WorkoutStore: ObservableObject {
                 type: exercise.type,
                 sets: exercise.type == .weights ? [WorkoutSetDraft()] : [],
                 weightUnit: defaultWeightUnit,
-                note: note(for: trimmedName)
+                exerciseNote: exerciseNote(for: trimmedName)
             )
         }
     }
@@ -1019,7 +1176,7 @@ final class WorkoutStore: ObservableObject {
         if let entries = backup.entries {
             self.entries = entries
         } else {
-            self.entries = backup.sessions.flatMap { session in
+            let legacyEntries = backup.sessions.flatMap { session in
                 session.exercises.map { exercise in
                     WorkoutExercise(
                         id: exercise.id,
@@ -1028,10 +1185,12 @@ final class WorkoutStore: ObservableObject {
                         sets: exercise.sets,
                         durationSeconds: exercise.durationSeconds,
                         calories: exercise.calories,
-                        loggedAt: exercise.loggedAt ?? session.date
+                        loggedAt: exercise.loggedAt ?? session.date,
+                        exerciseEntry: exercise.exerciseEntry
                     )
                 }
             }
+            self.entries = legacyEntries
         }
         templates = backup.templates
         exerciseNotes = backup.notes ?? [:]
@@ -1039,7 +1198,6 @@ final class WorkoutStore: ObservableObject {
         updateExerciseTypes(from: self.entries)
         updateExerciseTypes(from: templates.flatMap { $0.exercises })
         saveEntries()
-        saveTemplates()
         saveExerciseNotes()
         refreshSessions()
     }
@@ -1088,7 +1246,7 @@ final class WorkoutStore: ObservableObject {
         let needsEntryMigration = entries.isEmpty
         if needsEntryMigration {
             let legacySessions = loadSessions()
-            entries = legacySessions.flatMap { session in
+            let legacyEntries = legacySessions.flatMap { session in
                 session.exercises.map { exercise in
                     WorkoutExercise(
                         id: exercise.id,
@@ -1097,10 +1255,12 @@ final class WorkoutStore: ObservableObject {
                         sets: exercise.sets,
                         durationSeconds: exercise.durationSeconds,
                         calories: exercise.calories,
-                        loggedAt: exercise.loggedAt ?? session.date
+                        loggedAt: exercise.loggedAt ?? session.date,
+                        exerciseEntry: exercise.exerciseEntry
                     )
                 }
             }
+            entries = legacyEntries
         }
         templates = loadTemplates()
         exerciseTypeMap = loadExerciseTypes()
@@ -1122,23 +1282,23 @@ final class WorkoutStore: ObservableObject {
         return exerciseTypeMap[key]
     }
 
-    func note(for name: String) -> String {
+    func exerciseNote(for name: String) -> String {
         let key = normalizedExerciseKey(name)
         guard !key.isEmpty else { return "" }
         return exerciseNotes[key] ?? ""
     }
 
-    func exerciseNotesList() -> [(name: String, note: String)] {
+    func exerciseNotesList() -> [(name: String, exerciseNote: String)] {
         exerciseNotes
-            .map { (name: $0.key, note: $0.value) }
-            .filter { !$0.name.isEmpty && !$0.note.isEmpty }
+            .map { (name: $0.key, exerciseNote: $0.value) }
+            .filter { !$0.name.isEmpty && !$0.exerciseNote.isEmpty }
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
-    func setNote(_ note: String, for name: String) {
+    func setExerciseNote(_ exerciseNote: String, for name: String) {
         let key = normalizedExerciseKey(name)
         guard !key.isEmpty else { return }
-        let trimmed = note.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = exerciseNote.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {
             if exerciseNotes.removeValue(forKey: key) != nil {
                 saveExerciseNotes()
@@ -1288,13 +1448,33 @@ final class WorkoutStore: ObservableObject {
         UserDefaults.standard.set(isDropSetsEnabled, forKey: "dropSetsEnabled")
     }
 
-    private func loadNotesEnabled() -> Bool {
+    private func loadExerciseNotesEnabled() -> Bool {
         let value = UserDefaults.standard.object(forKey: "notesEnabled") as? Bool
         return value ?? true
     }
 
-    private func saveNotesEnabled() {
-        UserDefaults.standard.set(isNotesEnabled, forKey: "notesEnabled")
+    private func saveExerciseNotesEnabled() {
+        UserDefaults.standard.set(isExerciseNotesEnabled, forKey: "notesEnabled")
+    }
+
+    private func loadExerciseEntryEnabled() -> Bool {
+        let value = UserDefaults.standard.object(forKey: "exerciseEntryEnabled") as? Bool
+        return value ?? true
+    }
+
+    private func saveExerciseEntryEnabled() {
+        UserDefaults.standard.set(isExerciseEntryEnabled, forKey: "exerciseEntryEnabled")
+    }
+
+    private func loadSpottingEnabled() -> Bool {
+        if UserDefaults.standard.object(forKey: "spottingEnabled") == nil {
+            return true
+        }
+        return UserDefaults.standard.bool(forKey: "spottingEnabled")
+    }
+
+    private func saveSpottingEnabled() {
+        UserDefaults.standard.set(isSpottingEnabled, forKey: "spottingEnabled")
     }
 
     private static let defaultLibrary: [LibraryExercise] = [
@@ -1540,33 +1720,39 @@ final class WorkoutStore: ObservableObject {
 
 struct ContentView: View {
     @StateObject private var store = WorkoutStore()
+    @AppStorage("selectedTab") private var selectedTab = 0
 
     var body: some View {
-        TabView {
+        TabView(selection: $selectedTab) {
             HomeView(store: store)
                 .tabItem {
                     Label("Home", systemImage: "house.fill")
                 }
+                .tag(0)
 
             HistoryView(store: store)
                 .tabItem {
                     Label("History", systemImage: "clock.fill")
                 }
+                .tag(1)
 
             ExerciseLibraryView(store: store)
                 .tabItem {
                     Label("Explore", systemImage: "square.grid.2x2.fill")
                 }
+                .tag(2)
 
             ProgressTabView(store: store)
                 .tabItem {
                     Label("Progress", systemImage: "chart.line.uptrend.xyaxis")
                 }
+                .tag(3)
 
             SettingsView(store: store)
                 .tabItem {
                     Label("Settings", systemImage: "gearshape.fill")
                 }
+                .tag(4)
         }
     }
 }
@@ -1588,6 +1774,8 @@ struct HomeView: View {
     @State private var templateSharePayload: TemplateShareSheetPayload?
     @State private var showTemplateScanner = false
     @State private var showTemplatePhotoPicker = false
+    @State private var pendingDeleteTemplate: WorkoutTemplate?
+    @State private var showDeleteTemplateConfirm = false
 
     var body: some View {
         ZStack {
@@ -1717,6 +1905,17 @@ struct HomeView: View {
         } message: {
             Text("Template added to your list.")
         }
+        .alert("Delete Template?", isPresented: $showDeleteTemplateConfirm) {
+            Button("Cancel", role: .cancel) {}
+            Button("Delete", role: .destructive) {
+                if let template = pendingDeleteTemplate {
+                    store.removeTemplate(template)
+                }
+                pendingDeleteTemplate = nil
+            }
+        } message: {
+            Text("This will permanently remove the template.")
+        }
     }
 
     private func handleTemplateImageImport(_ image: UIImage) {
@@ -1756,12 +1955,12 @@ struct HomeView: View {
                 Text("MyWorkout")
                     .font(.custom("Avenir Next", size: 34))
                     .fontWeight(.semibold)
-                    .foregroundStyle(themeColor(.sand))
+                    .foregroundStyle(themedPrimaryText())
                 Spacer()
             }
             Text("Track what you lift, keep it simple.")
                 .font(.custom("Avenir Next", size: 16))
-                .foregroundStyle(themeColor(.sand).opacity(0.7))
+                .foregroundStyle(themedSecondaryText())
         }
     }
 
@@ -1849,7 +2048,7 @@ struct HomeView: View {
                 Text("Templates")
                     .font(.custom("Avenir Next", size: 18))
                     .fontWeight(.semibold)
-                    .foregroundStyle(themeColor(.sand))
+                    .foregroundStyle(themedPrimaryText())
                 Spacer()
                 Menu {
                     Button {
@@ -1871,14 +2070,14 @@ struct HomeView: View {
                 } label: {
                     Image(systemName: "plus")
                         .font(.custom("Avenir Next", size: 16))
-                        .foregroundStyle(themeColor(.sand))
+                        .foregroundStyle(themedPrimaryText())
                 }
             }
 
             if store.templates.isEmpty {
                 Text("Create a template to reuse your go-to workouts.")
                     .font(.custom("Avenir Next", size: 14))
-                    .foregroundStyle(themeColor(.sand).opacity(0.6))
+                    .foregroundStyle(themedSecondaryText())
             } else {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 12) {
@@ -1901,7 +2100,8 @@ struct HomeView: View {
                                     editingTemplate = template
                                 },
                                 onDelete: {
-                                    store.removeTemplate(template)
+                                    pendingDeleteTemplate = template
+                                    showDeleteTemplateConfirm = true
                                 }
                             )
                         }
@@ -1917,13 +2117,13 @@ struct HomeView: View {
             Text("Quick Start")
                 .font(.custom("Avenir Next", size: 18))
                 .fontWeight(.semibold)
-                .foregroundStyle(themeColor(.sand))
+                .foregroundStyle(themedPrimaryText())
 
             let recentExercises = recentWorkoutExercises(limit: 8)
             if recentExercises.isEmpty {
                 Text("No exercises yet. Add a workout to start your log.")
                     .font(.custom("Avenir Next", size: 14))
-                    .foregroundStyle(themeColor(.sand).opacity(0.6))
+                    .foregroundStyle(themedSecondaryText())
             } else {
                 ForEach(recentExercises, id: \.self) { name in
                     Button {
@@ -1991,7 +2191,7 @@ struct HomeView: View {
             .font(.custom("Avenir Next", size: 18))
             .padding(.vertical, 12)
             .frame(maxWidth: .infinity)
-            .foregroundStyle(themeColor(.night))
+            .foregroundStyle(themedAccentForeground())
             .background(themeColor(.sand))
             .clipShape(Capsule())
             .padding(.horizontal, 24)
@@ -2054,7 +2254,7 @@ struct HistoryView: View {
                                     } label: {
                                         Label("Edit", systemImage: "pencil")
                                     }
-                                    .tint(themeColor(.sand))
+                                    .tint(themedAccent())
                                 }
                             }
                         }
@@ -2062,7 +2262,7 @@ struct HistoryView: View {
                         Text("History")
                             .font(.custom("Avenir Next", size: 28))
                             .fontWeight(.semibold)
-                            .foregroundStyle(themeColor(.sand))
+                            .foregroundStyle(themedPrimaryText())
                     }
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
@@ -2075,9 +2275,14 @@ struct HistoryView: View {
             .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(for: UUID.self) { id in
                 if let session = store.sessions.first(where: { $0.id == id }) {
-                    SessionDetailView(session: session, weightUnit: store.defaultWeightUnit) {
-                        editingSession = session
-                    }
+                    SessionDetailView(
+                        session: session,
+                        weightUnit: store.defaultWeightUnit,
+                        onEdit: { editingSession = session },
+                        onDeleteExercise: { exercise in
+                            store.removeExercise(exercise, from: session)
+                        }
+                    )
                 }
             }
         }
@@ -2135,7 +2340,7 @@ struct SettingsView: View {
                     Text("Settings")
                         .font(.custom("Avenir Next", size: 30))
                         .fontWeight(.semibold)
-                        .foregroundStyle(themeColor(.sand))
+                        .foregroundStyle(themedPrimaryText())
 
                     preferencesCard
                     featureControlsCard
@@ -2201,22 +2406,22 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Preferences")
                 .font(.custom("Avenir Next", size: 14))
-                .foregroundStyle(themeColor(.sand).opacity(0.7))
+                .foregroundStyle(themedSecondaryText())
 
             VStack(alignment: .leading, spacing: 10) {
                 Text("Session Window")
                     .font(.custom("Avenir Next", size: 15))
-                    .foregroundStyle(themeColor(.sand))
+                    .foregroundStyle(themedPrimaryText())
                 Text("Workouts logged within this window merge into the same session.")
                     .font(.custom("Avenir Next", size: 12))
-                    .foregroundStyle(themeColor(.sand).opacity(0.6))
+                    .foregroundStyle(themedSecondaryText())
                 Picker("Session Window", selection: $sessionWindowSelection) {
                     ForEach(SessionMergeWindowOption.allCases, id: \.self) { option in
                         Text(option.label).tag(option)
                     }
                 }
                 .pickerStyle(.menu)
-                .tint(themeColor(.sand))
+                .tint(themedAccent())
                 .onChange(of: sessionWindowSelection) { _, newValue in
                     guard !isSettingUp else { return }
                     guard newValue != store.sessionMergeWindowOption else { return }
@@ -2235,13 +2440,14 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Default Weight Unit")
                     .font(.custom("Avenir Next", size: 15))
-                    .foregroundStyle(themeColor(.sand))
+                    .foregroundStyle(themedPrimaryText())
                 Picker("Default Weight Unit", selection: $store.defaultWeightUnit) {
                     ForEach(WeightUnit.allCases, id: \.self) { unit in
                         Text(unit.label).tag(unit)
                     }
                 }
                 .pickerStyle(.segmented)
+                .tint(themedAccent())
             }
 
             Divider()
@@ -2250,13 +2456,14 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Theme")
                     .font(.custom("Avenir Next", size: 15))
-                    .foregroundStyle(themeColor(.sand))
+                    .foregroundStyle(themedPrimaryText())
                 Picker("Theme", selection: $themeStore.selectedTheme) {
                     ForEach(AppTheme.allCases, id: \.self) { theme in
                         Text(theme.label).tag(theme)
                     }
                 }
                 .pickerStyle(.segmented)
+                .tint(themedAccent())
             }
 
         }
@@ -2272,21 +2479,38 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Feature Controls")
                 .font(.custom("Avenir Next", size: 14))
-                .foregroundStyle(themeColor(.sand).opacity(0.7))
+                .foregroundStyle(themedSecondaryText())
+            Text("Toggle optional tools on or off to keep workouts simple or add extra detail.")
+                .font(.custom("Avenir Next", size: 12))
+                .foregroundStyle(themedSecondaryText())
 
             Toggle(isOn: $store.isDropSetsEnabled) {
                 Text("Drop Sets")
                     .font(.custom("Avenir Next", size: 16))
-                    .foregroundStyle(themeColor(.sand))
+                    .foregroundStyle(themedPrimaryText())
             }
-            .tint(themeColor(.sand))
+            .tint(themedAccent())
 
-            Toggle(isOn: $store.isNotesEnabled) {
-                Text("Notes")
+            Toggle(isOn: $store.isExerciseNotesEnabled) {
+                Text("Exercise Notes")
                     .font(.custom("Avenir Next", size: 16))
-                    .foregroundStyle(themeColor(.sand))
+                    .foregroundStyle(themedPrimaryText())
             }
-            .tint(themeColor(.sand))
+            .tint(themedAccent())
+
+            Toggle(isOn: $store.isExerciseEntryEnabled) {
+                Text("Exercise Entry")
+                    .font(.custom("Avenir Next", size: 16))
+                    .foregroundStyle(themedPrimaryText())
+            }
+            .tint(themedAccent())
+
+            Toggle(isOn: $store.isSpottingEnabled) {
+                Text("Spotted Sets")
+                    .font(.custom("Avenir Next", size: 16))
+                    .foregroundStyle(themedPrimaryText())
+            }
+            .tint(themedAccent())
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -2300,7 +2524,7 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Data")
                 .font(.custom("Avenir Next", size: 14))
-                .foregroundStyle(themeColor(.sand).opacity(0.7))
+                .foregroundStyle(themedSecondaryText())
 
             Button {
                 do {
@@ -2338,22 +2562,22 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("About")
                 .font(.custom("Avenir Next", size: 14))
-                .foregroundStyle(themeColor(.sand).opacity(0.7))
+                .foregroundStyle(themedSecondaryText())
             Text("MyWorkout")
                 .font(.custom("Avenir Next", size: 18))
-                .foregroundStyle(themeColor(.sand))
+                .foregroundStyle(themedPrimaryText())
             Text("Track what you lift, keep it simple.")
                 .font(.custom("Avenir Next", size: 13))
-                .foregroundStyle(themeColor(.sand).opacity(0.7))
+                .foregroundStyle(themedSecondaryText())
             Text("Data stays on device unless you export a backup.")
                 .font(.custom("Avenir Next", size: 12))
-                .foregroundStyle(themeColor(.sand).opacity(0.6))
+                .foregroundStyle(themedSecondaryText())
             Text("License: MIT")
                 .font(.custom("Avenir Next", size: 12))
-                .foregroundStyle(themeColor(.sand).opacity(0.6))
+                .foregroundStyle(themedSecondaryText())
             Text("Version \(appVersion)")
                 .font(.custom("Avenir Next", size: 12))
-                .foregroundStyle(themeColor(.sand).opacity(0.6))
+                .foregroundStyle(themedSecondaryText())
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -2373,10 +2597,10 @@ struct SettingsView: View {
         HStack {
             Image(systemName: systemImage)
                 .font(.custom("Avenir Next", size: 16))
-                .foregroundStyle(isDestructive ? Color.red.opacity(0.8) : themeColor(.sand))
+                .foregroundStyle(isDestructive ? themedPrimaryText().opacity(0.9) : themedPrimaryText())
             Text(title)
                 .font(.custom("Avenir Next", size: 16))
-                .foregroundStyle(isDestructive ? Color.red.opacity(0.8) : themeColor(.sand))
+                .foregroundStyle(isDestructive ? themedPrimaryText().opacity(0.9) : themedPrimaryText())
             Spacer()
         }
         .padding(.vertical, 10)
@@ -2471,7 +2695,7 @@ struct ProgressTabView: View {
                     Text("Progress")
                         .font(.custom("Avenir Next", size: 30))
                         .fontWeight(.semibold)
-                        .foregroundStyle(themeColor(.sand))
+                        .foregroundStyle(themedPrimaryText())
 
                     Picker("Range", selection: $range) {
                         ForEach(ProgressRange.allCases, id: \.self) { option in
@@ -2479,6 +2703,7 @@ struct ProgressTabView: View {
                         }
                     }
                     .pickerStyle(.segmented)
+                    .tint(themedAccent())
 
                     strengthSection
                     volumeSection
@@ -2518,7 +2743,7 @@ struct ProgressTabView: View {
                 Text("Strength Trend")
                     .font(.custom("Avenir Next", size: 18))
                     .fontWeight(.semibold)
-                    .foregroundStyle(themeColor(.sand))
+                    .foregroundStyle(themedPrimaryText())
                 Spacer()
                 if !recentExerciseNames.isEmpty {
                     Picker("Exercise", selection: $selectedExercise) {
@@ -2527,7 +2752,7 @@ struct ProgressTabView: View {
                         }
                     }
                     .pickerStyle(.menu)
-                    .tint(themeColor(.sand))
+                    .tint(themedAccent())
                 }
             }
 
@@ -2540,13 +2765,13 @@ struct ProgressTabView: View {
                             x: .value("Date", point.date),
                             y: .value("Weight", point.weight)
                         )
-                        .foregroundStyle(themeColor(.sand))
+                        .foregroundStyle(themedAccent())
 
                         PointMark(
                             x: .value("Date", point.date),
                             y: .value("Weight", point.weight)
                         )
-                        .foregroundStyle(themeColor(.sand))
+                        .foregroundStyle(themedAccent())
                     }
                 }
                 .frame(height: 220)
@@ -2566,7 +2791,7 @@ struct ProgressTabView: View {
             Text("Volume Trend")
                 .font(.custom("Avenir Next", size: 18))
                 .fontWeight(.semibold)
-                .foregroundStyle(themeColor(.sand))
+                .foregroundStyle(themedPrimaryText())
 
             if volumePoints.isEmpty {
                 emptyCard(text: "No volume data yet.")
@@ -2577,7 +2802,7 @@ struct ProgressTabView: View {
                             x: .value("Date", point.date),
                             y: .value("Volume", point.volume)
                         )
-                        .foregroundStyle(themeColor(.sand).opacity(0.7))
+                        .foregroundStyle(themedAccentMuted())
                     }
                 }
                 .frame(height: 220)
@@ -2597,7 +2822,7 @@ struct ProgressTabView: View {
             Text("Workout Consistency")
                 .font(.custom("Avenir Next", size: 18))
                 .fontWeight(.semibold)
-                .foregroundStyle(themeColor(.sand))
+                .foregroundStyle(themedPrimaryText())
 
             if weeklyWorkouts.isEmpty {
                 emptyCard(text: "No workouts yet.")
@@ -2608,7 +2833,7 @@ struct ProgressTabView: View {
                             x: .value("Week", point.weekStart),
                             y: .value("Workouts", point.value)
                         )
-                        .foregroundStyle(themeColor(.sand))
+                        .foregroundStyle(themedAccent())
                     }
                 }
                 .frame(height: 200)
@@ -2628,7 +2853,7 @@ struct ProgressTabView: View {
             Text("Cardio Trend")
                 .font(.custom("Avenir Next", size: 18))
                 .fontWeight(.semibold)
-                .foregroundStyle(themeColor(.sand))
+                .foregroundStyle(themedPrimaryText())
 
             if weeklyCardio.isEmpty {
                 emptyCard(text: "No cardio yet.")
@@ -2639,13 +2864,13 @@ struct ProgressTabView: View {
                             x: .value("Week", point.weekStart),
                             y: .value("Minutes", point.minutes)
                         )
-                        .foregroundStyle(themeColor(.sand).opacity(0.7))
+                        .foregroundStyle(themedAccentMuted())
 
                         LineMark(
                             x: .value("Week", point.weekStart),
                             y: .value("Calories", point.calories)
                         )
-                        .foregroundStyle(themeColor(.sand))
+                        .foregroundStyle(themedAccent())
                     }
                 }
                 .frame(height: 200)
@@ -2665,7 +2890,7 @@ struct ProgressTabView: View {
             Text("Recent PRs")
                 .font(.custom("Avenir Next", size: 18))
                 .fontWeight(.semibold)
-                .foregroundStyle(themeColor(.sand))
+                .foregroundStyle(themedPrimaryText())
 
             if prItems.isEmpty {
                 emptyCard(text: "No PRs yet.")
@@ -2676,15 +2901,15 @@ struct ProgressTabView: View {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(item.name)
                                     .font(.custom("Avenir Next", size: 16))
-                                    .foregroundStyle(themeColor(.sand))
+                                    .foregroundStyle(themedPrimaryText())
                                 Text(item.date.formatted(date: .abbreviated, time: .omitted))
                                     .font(.custom("Avenir Next", size: 12))
-                                    .foregroundStyle(themeColor(.sand).opacity(0.6))
+                                    .foregroundStyle(themedSecondaryText())
                             }
                             Spacer()
                             Text("\(formattedWeight(item.weight, unit: store.defaultWeightUnit)) x \(item.reps)")
                                 .font(.custom("Avenir Next", size: 14))
-                                .foregroundStyle(themeColor(.sand))
+                                .foregroundStyle(themedPrimaryText())
                         }
                         .padding(12)
                         .background(
@@ -2702,7 +2927,7 @@ struct ProgressTabView: View {
             Text("Exercise Focus")
                 .font(.custom("Avenir Next", size: 18))
                 .fontWeight(.semibold)
-                .foregroundStyle(themeColor(.sand))
+                .foregroundStyle(themedPrimaryText())
 
             if focusItems.isEmpty {
                 emptyCard(text: "No exercise focus yet.")
@@ -2712,11 +2937,11 @@ struct ProgressTabView: View {
                         HStack {
                             Text(item.name)
                                 .font(.custom("Avenir Next", size: 16))
-                                .foregroundStyle(themeColor(.sand))
+                                .foregroundStyle(themedPrimaryText())
                             Spacer()
                             Text("\(item.count) sets")
                                 .font(.custom("Avenir Next", size: 14))
-                                .foregroundStyle(themeColor(.sand).opacity(0.8))
+                                .foregroundStyle(themedSecondaryText())
                         }
                         .padding(12)
                         .background(
@@ -2732,7 +2957,7 @@ struct ProgressTabView: View {
     private func emptyCard(text: String) -> some View {
         Text(text)
             .font(.custom("Avenir Next", size: 14))
-            .foregroundStyle(themeColor(.sand).opacity(0.6))
+            .foregroundStyle(themedSecondaryText())
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
@@ -2865,12 +3090,12 @@ struct ExerciseHistoryCard: View {
             Text(name)
                 .font(.custom("Avenir Next", size: 18))
                 .fontWeight(.semibold)
-                .foregroundStyle(themeColor(.sand))
+                .foregroundStyle(themedPrimaryText())
 
             if let record {
                 Text("Last used \(record.date.formatted(date: .abbreviated, time: .omitted))")
                     .font(.custom("Avenir Next", size: 12))
-                    .foregroundStyle(themeColor(.sand).opacity(0.6))
+                    .foregroundStyle(themedSecondaryText())
 
                 HStack(spacing: 12) {
                     ForEach(tags(for: record.exercise), id: \.self) { tag in
@@ -2880,7 +3105,7 @@ struct ExerciseHistoryCard: View {
             } else {
                 Text("No logged workout yet")
                     .font(.custom("Avenir Next", size: 12))
-                    .foregroundStyle(themeColor(.sand).opacity(0.6))
+                    .foregroundStyle(themedSecondaryText())
             }
         }
         .padding(18)
@@ -2931,8 +3156,10 @@ struct ExerciseDraft: Identifiable, Equatable {
     var calories: String
     var durationPlaceholder: String
     var caloriesPlaceholder: String
-    var note: String
-    var isNoteExpanded: Bool
+    var exerciseNote: String
+    var isExerciseNoteExpanded: Bool
+    var exerciseEntry: String
+    var isExerciseEntryExpanded: Bool
     var entryId: UUID?
     var loggedAt: Date?
 
@@ -2946,8 +3173,10 @@ struct ExerciseDraft: Identifiable, Equatable {
         calories: String = "",
         durationPlaceholder: String = "",
         caloriesPlaceholder: String = "",
-        note: String = "",
-        isNoteExpanded: Bool = false,
+        exerciseNote: String = "",
+        isExerciseNoteExpanded: Bool = false,
+        exerciseEntry: String = "",
+        isExerciseEntryExpanded: Bool = false,
         entryId: UUID? = nil,
         loggedAt: Date? = nil
     ) {
@@ -2960,8 +3189,10 @@ struct ExerciseDraft: Identifiable, Equatable {
         self.calories = calories
         self.durationPlaceholder = durationPlaceholder
         self.caloriesPlaceholder = caloriesPlaceholder
-        self.note = note
-        self.isNoteExpanded = isNoteExpanded
+        self.exerciseNote = exerciseNote
+        self.isExerciseNoteExpanded = isExerciseNoteExpanded
+        self.exerciseEntry = exerciseEntry
+        self.isExerciseEntryExpanded = isExerciseEntryExpanded
         self.entryId = entryId
         self.loggedAt = loggedAt
     }
@@ -2973,19 +3204,25 @@ struct WorkoutSetSegmentDraft: Identifiable, Equatable {
     var reps: String
     var weightPlaceholder: String
     var repsPlaceholder: String
+    var isSpotted: Bool
+    var isSpottedPlaceholder: Bool
 
     init(
         id: UUID = UUID(),
         weight: String = "",
         reps: String = "",
         weightPlaceholder: String = "",
-        repsPlaceholder: String = ""
+        repsPlaceholder: String = "",
+        isSpotted: Bool = false,
+        isSpottedPlaceholder: Bool = false
     ) {
         self.id = id
         self.weight = weight
         self.reps = reps
         self.weightPlaceholder = weightPlaceholder
         self.repsPlaceholder = repsPlaceholder
+        self.isSpotted = isSpotted
+        self.isSpottedPlaceholder = isSpottedPlaceholder
     }
 }
 
@@ -3011,7 +3248,13 @@ struct AddWorkoutView: View {
     @State private var workoutDate = Date()
     @State private var drafts: [ExerciseDraft] = []
     @State private var hasLoadedDrafts = false
-    @State private var isKeyboardVisible = false
+    @State private var showsTimeEditor = false
+    @State private var usesManualTimes = false
+    @State private var manualStartTime = Date()
+    @State private var manualEndTime = Date()
+    @State private var showSpotHud = false
+    @State private var spotHudMessage = ""
+    @State private var spotHudDismissWorkItem: DispatchWorkItem?
 
     private var validation: (validExercises: [WorkoutExercise], hasInvalid: Bool) {
         var validExercises: [WorkoutExercise] = []
@@ -3053,7 +3296,14 @@ struct AddWorkoutView: View {
                             continue
                         }
 
-                        segmentModels.append(WorkoutSetSegment(id: UUID(), weightKg: weightValue, reps: repsValue))
+                        segmentModels.append(
+                            WorkoutSetSegment(
+                                id: UUID(),
+                                weightKg: weightValue,
+                                reps: repsValue,
+                                isSpotted: segment.isSpotted
+                            )
+                        )
                     }
 
                     if hasPartialSegment {
@@ -3065,7 +3315,7 @@ struct AddWorkoutView: View {
                         continue
                     }
 
-                    setModels.append(WorkoutSet(id: UUID(), segments: segmentModels))
+                    setModels.append(WorkoutSet(id: setDraft.id, segments: segmentModels))
                 }
 
                 let hasAnySetInput = draft.sets.contains { set in
@@ -3102,7 +3352,8 @@ struct AddWorkoutView: View {
                         sets: setModels,
                         durationSeconds: nil,
                         calories: nil,
-                        loggedAt: draft.loggedAt
+                        loggedAt: draft.loggedAt,
+                        exerciseEntry: draft.exerciseEntry
                     )
                 )
             case .cardio:
@@ -3141,7 +3392,8 @@ struct AddWorkoutView: View {
                         sets: [],
                         durationSeconds: durationValue,
                         calories: caloriesValue,
-                        loggedAt: draft.loggedAt
+                        loggedAt: draft.loggedAt,
+                        exerciseEntry: draft.exerciseEntry
                     )
                 )
             }
@@ -3200,9 +3452,9 @@ struct AddWorkoutView: View {
                     Text(titleText)
                         .font(.custom("Avenir Next", size: 28))
                         .fontWeight(.semibold)
-                        .foregroundStyle(themeColor(.sand))
+                        .foregroundStyle(themedPrimaryText())
 
-                    datePickerCard
+                    scheduleCard
 
                     exerciseEditors
 
@@ -3214,7 +3466,7 @@ struct AddWorkoutView: View {
                             Text("Add Exercise")
                         }
                         .font(.custom("Avenir Next", size: 16))
-                        .foregroundStyle(themeColor(.sand))
+                        .foregroundStyle(themedPrimaryText())
                     }
                 }
                 .padding(24)
@@ -3222,17 +3474,49 @@ struct AddWorkoutView: View {
             }
             .scrollDismissesKeyboard(.interactively)
         }
+        .overlay(alignment: .top) {
+            if showSpotHud {
+                Text(spotHudMessage)
+                    .font(.custom("Avenir Next", size: 14))
+                    .foregroundStyle(themedAccentForeground())
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 9)
+                    .background(
+                        Capsule()
+                            .fill(themeColor(.sand))
+                    )
+                    .shadow(color: themeColor(.night).opacity(0.2), radius: 6, x: 0, y: 4)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .padding(.top, 12)
+            }
+        }
+        .onChange(of: manualStartTime) { _, newValue in
+            let minimumEnd = Calendar.current.date(byAdding: .minute, value: 5, to: newValue) ?? newValue
+            if manualEndTime < minimumEnd {
+                manualEndTime = minimumEnd
+            }
+        }
+        .onChange(of: manualEndTime) { _, newValue in
+            let minimumEnd = Calendar.current.date(byAdding: .minute, value: 5, to: manualStartTime) ?? manualStartTime
+            if newValue < minimumEnd {
+                manualEndTime = minimumEnd
+            }
+        }
         .contentShape(Rectangle())
         .onTapGesture {
-            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            dismissKeyboard()
         }
         .safeAreaInset(edge: .bottom) {
-            if !isKeyboardVisible {
-                VStack(spacing: 10) {
-                    Button {
-                    let finalExercises = session == nil
-                        ? stampTimes(validExercises)
-                        : fillMissingTimes(validExercises)
+            VStack(spacing: 10) {
+                Button {
+                    let finalExercises: [WorkoutExercise]
+                    if session == nil {
+                        finalExercises = applyTimes(to: validExercises)
+                    } else if usesManualTimes {
+                        finalExercises = applyTimes(to: validExercises)
+                    } else {
+                        finalExercises = fillMissingTimes(validExercises)
+                    }
                     if let session {
                         store.updateSession(session, date: sessionDate(from: finalExercises), exercises: finalExercises)
                     } else {
@@ -3241,54 +3525,53 @@ struct AddWorkoutView: View {
                             store.incrementTemplateUsage(for: template)
                         }
                     }
-                    if store.isNotesEnabled {
+                    if store.isExerciseNotesEnabled {
                         for draft in drafts {
                             let name = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
                             guard !name.isEmpty else { continue }
-                            store.setNote(draft.note, for: name)
+                            store.setExerciseNote(draft.exerciseNote, for: name)
                         }
                     }
                     dismiss()
                 } label: {
-                        Text(saveLabel)
-                            .font(.custom("Avenir Next", size: 18))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
-                            .foregroundStyle(themeColor(.night))
-                            .background(themeColor(.sand))
-                            .clipShape(Capsule())
-                    }
-                    .disabled(!canSave)
-                    .opacity(canSave ? 1 : 0.4)
-
-                    Button {
-                        dismiss()
-                    } label: {
-                        Text("Cancel")
-                            .font(.custom("Avenir Next", size: 18))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
-                            .foregroundStyle(themeColor(.sand))
-                            .background(
-                                Capsule()
-                                    .stroke(themeColor(.sand).opacity(0.6), lineWidth: 1)
-                            )
-                    }
+                    Text(saveLabel)
+                        .font(.custom("Avenir Next", size: 18))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .foregroundStyle(themedAccentForeground())
+                        .background(themeColor(.sand))
+                        .clipShape(Capsule())
                 }
-                .padding(.horizontal, 24)
-                .padding(.bottom, 12)
-                .background(
-                    LinearGradient(
-                        colors: [
-                            themeColor(.night).opacity(0.0),
-                            themeColor(.night).opacity(0.85)
-                        ],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                    .ignoresSafeArea()
-                )
+                .disabled(!canSave)
+                .opacity(canSave ? 1 : 0.4)
+
+                Button {
+                    dismiss()
+                } label: {
+                    Text("Cancel")
+                        .font(.custom("Avenir Next", size: 18))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .foregroundStyle(themedPrimaryText())
+                        .background(
+                            Capsule()
+                                .stroke(themedAccentMuted(), lineWidth: 1)
+                        )
+                }
             }
+            .padding(.horizontal, 24)
+            .padding(.bottom, 12)
+            .background(
+                LinearGradient(
+                    colors: [
+                        themeColor(.night).opacity(0.0),
+                        themeColor(.night).opacity(0.85)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .ignoresSafeArea()
+            )
         }
         .onAppear {
             guard !hasLoadedDrafts else { return }
@@ -3296,6 +3579,8 @@ struct AddWorkoutView: View {
             if let session {
                 workoutDate = session.date
                 drafts = drafts(for: session)
+                manualStartTime = Date()
+                manualEndTime = Date()
                 return
             }
             if let template {
@@ -3303,13 +3588,24 @@ struct AddWorkoutView: View {
             } else {
                 drafts = [ExerciseDraft(weightUnit: store.defaultWeightUnit)]
             }
+            manualStartTime = Date()
+            manualEndTime = Date()
         }
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
-            isKeyboardVisible = true
+    }
+
+    private func presentSpotHud(message: String) {
+        spotHudMessage = message
+        spotHudDismissWorkItem?.cancel()
+        withAnimation(.easeOut(duration: 0.2)) {
+            showSpotHud = true
         }
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
-            isKeyboardVisible = false
+        let workItem = DispatchWorkItem {
+            withAnimation(.easeIn(duration: 0.2)) {
+                showSpotHud = false
+            }
         }
+        spotHudDismissWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2, execute: workItem)
     }
 
     private func drafts(for session: WorkoutSession) -> [ExerciseDraft] {
@@ -3317,14 +3613,15 @@ struct AddWorkoutView: View {
             switch exercise.type {
             case .weights:
                 let setDrafts = exercise.sets.map { set in
-                    let segmentDrafts = set.segments.map { segment in
-                        WorkoutSetSegmentDraft(
-                            weight: segment.weightKg == 0
-                                ? "0"
-                                : String(format: "%.1f", weightValue(segment.weightKg, unit: store.defaultWeightUnit)),
-                            reps: "\(segment.reps)"
-                        )
-                    }
+                let segmentDrafts = set.segments.map { segment in
+                    WorkoutSetSegmentDraft(
+                        weight: segment.weightKg == 0
+                            ? "0"
+                            : String(format: "%.1f", weightValue(segment.weightKg, unit: store.defaultWeightUnit)),
+                        reps: "\(segment.reps)",
+                        isSpotted: segment.isSpotted
+                    )
+                }
                     return WorkoutSetDraft(segments: segmentDrafts.isEmpty ? [WorkoutSetSegmentDraft()] : segmentDrafts)
                 }
                 return ExerciseDraft(
@@ -3332,7 +3629,8 @@ struct AddWorkoutView: View {
                     type: .weights,
                     sets: setDrafts.isEmpty ? [WorkoutSetDraft()] : setDrafts,
                     weightUnit: store.defaultWeightUnit,
-                    note: store.note(for: exercise.name),
+                    exerciseNote: store.exerciseNote(for: exercise.name),
+                    exerciseEntry: exercise.exerciseEntry ?? "",
                     entryId: exercise.id,
                     loggedAt: exercise.loggedAt
                 )
@@ -3344,7 +3642,8 @@ struct AddWorkoutView: View {
                     weightUnit: store.defaultWeightUnit,
                     durationMinutes: formattedDurationValue(exercise.durationSeconds),
                     calories: formattedOptionalInt(exercise.calories),
-                    note: store.note(for: exercise.name),
+                    exerciseNote: store.exerciseNote(for: exercise.name),
+                    exerciseEntry: exercise.exerciseEntry ?? "",
                     entryId: exercise.id,
                     loggedAt: exercise.loggedAt
                 )
@@ -3362,44 +3661,133 @@ struct AddWorkoutView: View {
                 showsMetrics: true,
                 knownType: store.exerciseType(for: draft.name),
                 isDropSetsEnabled: store.isDropSetsEnabled,
-                isNotesEnabled: store.isNotesEnabled,
-                noteForName: store.note(for:),
+                isExerciseNotesEnabled: store.isExerciseNotesEnabled,
+                isExerciseEntryEnabled: store.isExerciseEntryEnabled,
+                isSpottingEnabled: store.isSpottingEnabled,
+                latestExerciseForName: { store.latestExerciseRecord(named: $0)?.exercise },
+                exerciseNoteForName: store.exerciseNote(for:),
                 onDelete: {
                     drafts.removeAll { $0.id == draft.id }
                 },
                 onMoveUp: nil,
-                onMoveDown: nil
+                onMoveDown: nil,
+                onSpotHud: { isSpotted in
+                    presentSpotHud(message: isSpotted ? "Spotted set" : "Spot removed")
+                }
             )
         }
     }
 
-    private var datePickerCard: some View {
+    private var scheduleCard: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Date")
+            Text("Schedule")
                 .font(.custom("Avenir Next", size: 12))
-                .foregroundStyle(themeColor(.sand).opacity(0.6))
-            HStack {
-                Text(relativeLabel(for: workoutDate))
-                    .font(.custom("Avenir Next", size: 16))
-                    .foregroundStyle(themeColor(.sand))
-                Spacer()
-                DatePicker(
-                    "",
-                    selection: $workoutDate,
-                    displayedComponents: [.date]
-                )
-                .labelsHidden()
-                .colorScheme(.dark)
-            }
-            .padding(12)
-            .background(
-                RoundedRectangle(cornerRadius: 14)
-                    .fill(themeColor(.card))
-            )
-            if isFutureDay(workoutDate) {
-                Text("Future date")
-                    .font(.custom("Avenir Next", size: 11))
-                    .foregroundStyle(themeColor(.sand).opacity(0.55))
+                .foregroundStyle(themedSecondaryText())
+
+            VStack(alignment: .leading, spacing: 12) {
+                Button {
+                    if showsTimeEditor {
+                        usesManualTimes = !shouldUseLiveSchedule()
+                        showsTimeEditor = false
+                    } else {
+                        usesManualTimes = true
+                        showsTimeEditor = true
+                    }
+                } label: {
+                    HStack {
+                        Text(scheduleSummary)
+                            .font(.custom("Avenir Next", size: 16))
+                            .foregroundStyle(themedPrimaryText())
+                        Spacer()
+                        Image(systemName: showsTimeEditor ? "chevron.up" : "chevron.down")
+                            .font(.custom("Avenir Next", size: 12))
+                            .foregroundStyle(themedSecondaryText())
+                    }
+                    .padding(14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14)
+                            .fill(themeColor(.card))
+                    )
+                }
+                .buttonStyle(.plain)
+
+                if showsTimeEditor {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Date")
+                            .font(.custom("Avenir Next", size: 11))
+                            .foregroundStyle(themedSecondaryText())
+                        HStack {
+                            Text(relativeLabel(for: workoutDate))
+                                .font(.custom("Avenir Next", size: 16))
+                                .foregroundStyle(themedPrimaryText())
+                            Spacer()
+                            DatePicker(
+                                "",
+                                selection: $workoutDate,
+                                displayedComponents: [.date]
+                            )
+                            .labelsHidden()
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(14)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14)
+                            .fill(themeColor(.card))
+                    )
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack {
+                            Text("Time")
+                                .font(.custom("Avenir Next", size: 11))
+                                .foregroundStyle(themedSecondaryText())
+                            Spacer()
+                            if isNowTime(manualStartTime) || isNowTime(manualEndTime) {
+                                Text("Now")
+                                    .font(.custom("Avenir Next", size: 11))
+                                    .foregroundStyle(themedSecondaryText())
+                            }
+                        }
+                        HStack {
+                            Text("Start")
+                                .font(.custom("Avenir Next", size: 13))
+                                .foregroundStyle(themedSecondaryText())
+                            Spacer()
+                            DatePicker(
+                                "",
+                                selection: $manualStartTime,
+                                displayedComponents: [.hourAndMinute]
+                            )
+                            .labelsHidden()
+                        }
+
+                        HStack {
+                            Text("End")
+                                .font(.custom("Avenir Next", size: 13))
+                                .foregroundStyle(themedSecondaryText())
+                            Spacer()
+                            DatePicker(
+                                "",
+                                selection: $manualEndTime,
+                                displayedComponents: [.hourAndMinute]
+                            )
+                            .labelsHidden()
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(14)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14)
+                            .fill(themeColor(.card))
+                    )
+
+                    if isFutureDay(workoutDate) {
+                        Text("Future date")
+                            .font(.custom("Avenir Next", size: 11))
+                            .foregroundStyle(themedSecondaryText())
+                    }
+                }
             }
         }
     }
@@ -3417,6 +3805,22 @@ struct AddWorkoutView: View {
         return date.formatted(date: .abbreviated, time: .omitted)
     }
 
+    private var scheduleSummary: String {
+        if usesManualTimes == false || shouldUseLiveSchedule() {
+            return "\(relativeLabel(for: Date())) · Now"
+        }
+        let dateLabel = relativeLabel(for: workoutDate)
+        let startLabel = manualStartTime.formatted(date: .omitted, time: .shortened)
+        let endLabel = manualEndTime.formatted(date: .omitted, time: .shortened)
+        return "\(dateLabel) · \(startLabel) – \(endLabel)"
+    }
+
+    private func shouldUseLiveSchedule() -> Bool {
+        Calendar.current.isDateInToday(workoutDate)
+            && isNowTime(manualStartTime)
+            && isNowTime(manualEndTime)
+    }
+
     private func formattedOptionalInt(_ value: Int?) -> String {
         guard let value else { return "" }
         return "\(value)"
@@ -3424,6 +3828,42 @@ struct AddWorkoutView: View {
 
     private func sessionDate(from exercises: [WorkoutExercise]) -> Date {
         exercises.map(\.loggedAt).compactMap { $0 }.min() ?? workoutDate
+    }
+
+    private func applyTimes(to exercises: [WorkoutExercise]) -> [WorkoutExercise] {
+        if usesManualTimes == false {
+            let now = Date()
+            return exercises.map { exercise in
+                if exercise.loggedAt != nil {
+                    return exercise
+                }
+                return WorkoutExercise(
+                    id: exercise.id,
+                    name: exercise.name,
+                    type: exercise.type,
+                    sets: exercise.sets,
+                    durationSeconds: exercise.durationSeconds,
+                    calories: exercise.calories,
+                    loggedAt: combineDate(workoutDate, time: now),
+                    exerciseEntry: exercise.exerciseEntry
+                )
+            }
+        }
+        let start = combineDate(workoutDate, time: manualStartTime)
+        let end = combineDate(workoutDate, time: manualEndTime)
+        let times = distributedTimes(count: exercises.count, start: start, end: end)
+        return exercises.enumerated().map { index, exercise in
+            WorkoutExercise(
+                id: exercise.id,
+                name: exercise.name,
+                type: exercise.type,
+                sets: exercise.sets,
+                durationSeconds: exercise.durationSeconds,
+                calories: exercise.calories,
+                loggedAt: times[index],
+                exerciseEntry: exercise.exerciseEntry
+            )
+        }
     }
 
     private func fillMissingTimes(_ exercises: [WorkoutExercise]) -> [WorkoutExercise] {
@@ -3439,25 +3879,8 @@ struct AddWorkoutView: View {
                 sets: exercise.sets,
                 durationSeconds: exercise.durationSeconds,
                 calories: exercise.calories,
-                loggedAt: fallback
-            )
-        }
-    }
-
-    private func stampTimes(_ exercises: [WorkoutExercise]) -> [WorkoutExercise] {
-        let timestamp = combineDate(workoutDate, time: Date())
-        return exercises.map { exercise in
-            if exercise.loggedAt != nil {
-                return exercise
-            }
-            return WorkoutExercise(
-                id: exercise.id,
-                name: exercise.name,
-                type: exercise.type,
-                sets: exercise.sets,
-                durationSeconds: exercise.durationSeconds,
-                calories: exercise.calories,
-                loggedAt: timestamp
+                loggedAt: fallback,
+                exerciseEntry: exercise.exerciseEntry
             )
         }
     }
@@ -3703,11 +4126,11 @@ struct TemplateFlowView: View {
                 let exercises = applyTimes(to: completion.exercises)
                 store.addSession(date: sessionDate(from: exercises), exercises: exercises)
                 store.incrementTemplateUsage(for: template)
-                if store.isNotesEnabled {
+                if store.isExerciseNotesEnabled {
                     for draft in drafts {
                         let name = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
                         guard !name.isEmpty else { continue }
-                        store.setNote(draft.note, for: name)
+                        store.setExerciseNote(draft.exerciseNote, for: name)
                     }
                 }
                 dismiss()
@@ -3795,7 +4218,6 @@ struct TemplateFlowView: View {
                                     displayedComponents: [.date]
                                 )
                                 .labelsHidden()
-                                .colorScheme(.dark)
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -3806,26 +4228,28 @@ struct TemplateFlowView: View {
                         )
 
                         VStack(alignment: .leading, spacing: 10) {
-                            Text("Time")
-                                .font(.custom("Avenir Next", size: 11))
-                                .foregroundStyle(themeColor(.sand).opacity(0.6))
+                            HStack {
+                                Text("Time")
+                                    .font(.custom("Avenir Next", size: 11))
+                                    .foregroundStyle(themeColor(.sand).opacity(0.6))
+                                Spacer()
+                                if isNowTime(manualStartTime) || isNowTime(manualEndTime) {
+                                    Text("Now")
+                                        .font(.custom("Avenir Next", size: 11))
+                                        .foregroundStyle(themeColor(.sand).opacity(0.6))
+                                }
+                            }
                             HStack {
                                 Text("Start")
                                     .font(.custom("Avenir Next", size: 13))
                                     .foregroundStyle(themeColor(.sand).opacity(0.75))
                                 Spacer()
-                                if isNowTime(manualStartTime) {
-                                    Text("Now")
-                                        .font(.custom("Avenir Next", size: 13))
-                                        .foregroundStyle(themeColor(.sand).opacity(0.75))
-                                }
                                 DatePicker(
                                     "",
                                     selection: $manualStartTime,
                                     displayedComponents: [.hourAndMinute]
                                 )
                                 .labelsHidden()
-                                .colorScheme(.dark)
                             }
 
                             HStack {
@@ -3833,18 +4257,12 @@ struct TemplateFlowView: View {
                                     .font(.custom("Avenir Next", size: 13))
                                     .foregroundStyle(themeColor(.sand).opacity(0.75))
                                 Spacer()
-                                if isNowTime(manualEndTime) {
-                                    Text("Now")
-                                        .font(.custom("Avenir Next", size: 13))
-                                        .foregroundStyle(themeColor(.sand).opacity(0.75))
-                                }
                                 DatePicker(
                                     "",
                                     selection: $manualEndTime,
                                     displayedComponents: [.hourAndMinute]
                                 )
                                 .labelsHidden()
-                                .colorScheme(.dark)
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -3946,7 +4364,14 @@ struct TemplateFlowView: View {
                         continue
                     }
 
-                    segmentModels.append(WorkoutSetSegment(id: UUID(), weightKg: weightValue, reps: repsValue))
+                    segmentModels.append(
+                        WorkoutSetSegment(
+                            id: UUID(),
+                            weightKg: weightValue,
+                            reps: repsValue,
+                            isSpotted: segment.isSpotted
+                        )
+                    )
                 }
 
                 if hasPartialSegment {
@@ -3958,7 +4383,7 @@ struct TemplateFlowView: View {
                     continue
                 }
 
-                setModels.append(WorkoutSet(id: UUID(), segments: segmentModels))
+                setModels.append(WorkoutSet(id: setDraft.id, segments: segmentModels))
             }
 
             let hasAnySetInput = draft.sets.contains { set in
@@ -3992,7 +4417,8 @@ struct TemplateFlowView: View {
                     sets: setModels,
                     durationSeconds: nil,
                     calories: nil,
-                    loggedAt: draft.loggedAt
+                    loggedAt: draft.loggedAt,
+                    exerciseEntry: draft.exerciseEntry
                 ),
                 false
             )
@@ -4029,7 +4455,8 @@ struct TemplateFlowView: View {
                     sets: [],
                     durationSeconds: durationValue,
                     calories: caloriesValue,
-                    loggedAt: draft.loggedAt
+                    loggedAt: draft.loggedAt,
+                    exerciseEntry: draft.exerciseEntry
                 ),
                 false
             )
@@ -4074,7 +4501,8 @@ struct TemplateFlowView: View {
                     sets: exercise.sets,
                     durationSeconds: exercise.durationSeconds,
                     calories: exercise.calories,
-                    loggedAt: combineDate(workoutDate, time: now)
+                    loggedAt: combineDate(workoutDate, time: now),
+                    exerciseEntry: exercise.exerciseEntry
                 )
             }
         }
@@ -4089,7 +4517,8 @@ struct TemplateFlowView: View {
                 sets: exercise.sets,
                 durationSeconds: exercise.durationSeconds,
                 calories: exercise.calories,
-                loggedAt: times[index]
+                loggedAt: times[index],
+                exerciseEntry: exercise.exerciseEntry
             )
         }
     }
@@ -4165,7 +4594,7 @@ struct TemplateFlowView: View {
             } label: {
                 Label("Skip", systemImage: "forward.fill")
             }
-            .tint(Color("Sand"))
+            .tint(themeColor(.sand))
         }
     }
 
@@ -4265,6 +4694,9 @@ struct TemplateExerciseEntryView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var isKeyboardVisible = false
     @State private var didSave = false
+    @State private var showSpotHud = false
+    @State private var spotHudMessage = ""
+    @State private var spotHudDismissWorkItem: DispatchWorkItem?
 
     init(
         store: WorkoutStore,
@@ -4318,7 +4750,14 @@ struct TemplateExerciseEntryView: View {
                         continue
                     }
 
-                    segmentModels.append(WorkoutSetSegment(id: UUID(), weightKg: weightValue, reps: repsValue))
+                    segmentModels.append(
+                        WorkoutSetSegment(
+                            id: UUID(),
+                            weightKg: weightValue,
+                            reps: repsValue,
+                            isSpotted: segment.isSpotted
+                        )
+                    )
                 }
 
                 if hasPartialSegment {
@@ -4330,7 +4769,7 @@ struct TemplateExerciseEntryView: View {
                     continue
                 }
 
-                setModels.append(WorkoutSet(id: UUID(), segments: segmentModels))
+                setModels.append(WorkoutSet(id: setDraft.id, segments: segmentModels))
             }
 
             let hasAnySetInput = draft.sets.contains { set in
@@ -4364,7 +4803,8 @@ struct TemplateExerciseEntryView: View {
                     sets: setModels,
                     durationSeconds: nil,
                     calories: nil,
-                    loggedAt: draft.loggedAt
+                    loggedAt: draft.loggedAt,
+                    exerciseEntry: draft.exerciseEntry
                 ),
                 false
             )
@@ -4401,7 +4841,8 @@ struct TemplateExerciseEntryView: View {
                     sets: [],
                     durationSeconds: durationValue,
                     calories: caloriesValue,
-                    loggedAt: draft.loggedAt
+                    loggedAt: draft.loggedAt,
+                    exerciseEntry: draft.exerciseEntry
                 ),
                 false
             )
@@ -4435,11 +4876,17 @@ struct TemplateExerciseEntryView: View {
                         showsMetrics: true,
                         knownType: store.exerciseType(for: draft.name),
                         isDropSetsEnabled: store.isDropSetsEnabled,
-                        isNotesEnabled: store.isNotesEnabled,
-                        noteForName: store.note(for:),
+                        isExerciseNotesEnabled: store.isExerciseNotesEnabled,
+                        isExerciseEntryEnabled: store.isExerciseEntryEnabled,
+                        isSpottingEnabled: store.isSpottingEnabled,
+                        latestExerciseForName: { store.latestExerciseRecord(named: $0)?.exercise },
+                        exerciseNoteForName: store.exerciseNote(for:),
                         onDelete: nil,
                         onMoveUp: nil,
-                        onMoveDown: nil
+                        onMoveDown: nil,
+                        onSpotHud: { isSpotted in
+                            presentSpotHud(message: isSpotted ? "Spotted set" : "Spot removed")
+                        }
                     )
                 }
                 .padding(24)
@@ -4447,9 +4894,25 @@ struct TemplateExerciseEntryView: View {
             }
             .scrollDismissesKeyboard(.interactively)
         }
+        .overlay(alignment: .top) {
+            if showSpotHud {
+                Text(spotHudMessage)
+                    .font(.custom("Avenir Next", size: 14))
+                    .foregroundStyle(themeColor(.night))
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 9)
+                    .background(
+                        Capsule()
+                            .fill(themeColor(.sand))
+                    )
+                    .shadow(color: themeColor(.night).opacity(0.2), radius: 6, x: 0, y: 4)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .padding(.top, 12)
+            }
+        }
         .contentShape(Rectangle())
         .onTapGesture {
-            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            dismissKeyboard()
         }
         .safeAreaInset(edge: .bottom) {
             if !isKeyboardVisible {
@@ -4516,6 +4979,21 @@ struct TemplateExerciseEntryView: View {
         }
     }
 
+    private func presentSpotHud(message: String) {
+        spotHudMessage = message
+        spotHudDismissWorkItem?.cancel()
+        withAnimation(.easeOut(duration: 0.2)) {
+            showSpotHud = true
+        }
+        let workItem = DispatchWorkItem {
+            withAnimation(.easeIn(duration: 0.2)) {
+                showSpotHud = false
+            }
+        }
+        spotHudDismissWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2, execute: workItem)
+    }
+
     private func parseDurationSeconds(_ text: String) -> Int? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let cleaned = trimmed.filter { !$0.isWhitespace }
@@ -4545,14 +5023,24 @@ struct ExerciseEditorRow: View {
     let showsMetrics: Bool
     let knownType: ExerciseType?
     let isDropSetsEnabled: Bool
-    let isNotesEnabled: Bool
-    let noteForName: ((String) -> String)?
+    let isExerciseNotesEnabled: Bool
+    let isExerciseEntryEnabled: Bool
+    let isSpottingEnabled: Bool
+    let latestExerciseForName: ((String) -> WorkoutExercise?)?
+    let exerciseNoteForName: ((String) -> String)?
     let onDelete: (() -> Void)?
     let onMoveUp: (() -> Void)?
     let onMoveDown: (() -> Void)?
     let onNameFocusChange: ((Bool) -> Void)?
+    let onSpotHud: ((Bool) -> Void)?
     @State private var lastUnit: WeightUnit = .kg
     @State private var isNameFocused = false
+    @State private var showSpotSheet = false
+    @State private var showExerciseNotesInfoSheet = false
+    @State private var showExerciseEntryInfoSheet = false
+    private static let spotIntroKey = "spotIntroShown"
+    private static let exerciseNotesInfoKey = "exerciseNotesInfoShown"
+    private static let exerciseEntryInfoKey = "exerciseEntryInfoShown"
 
     init(
         draft: Binding<ExerciseDraft>,
@@ -4561,11 +5049,15 @@ struct ExerciseEditorRow: View {
         showsMetrics: Bool,
         knownType: ExerciseType?,
         isDropSetsEnabled: Bool,
-        isNotesEnabled: Bool,
-        noteForName: ((String) -> String)?,
+        isExerciseNotesEnabled: Bool,
+        isExerciseEntryEnabled: Bool,
+        isSpottingEnabled: Bool,
+        latestExerciseForName: ((String) -> WorkoutExercise?)? = nil,
+        exerciseNoteForName: ((String) -> String)?,
         onDelete: (() -> Void)?,
         onMoveUp: (() -> Void)?,
         onMoveDown: (() -> Void)?,
+        onSpotHud: ((Bool) -> Void)? = nil,
         onNameFocusChange: ((Bool) -> Void)? = nil
     ) {
         self._draft = draft
@@ -4574,11 +5066,15 @@ struct ExerciseEditorRow: View {
         self.showsMetrics = showsMetrics
         self.knownType = knownType
         self.isDropSetsEnabled = isDropSetsEnabled
-        self.isNotesEnabled = isNotesEnabled
-        self.noteForName = noteForName
+        self.isExerciseNotesEnabled = isExerciseNotesEnabled
+        self.isExerciseEntryEnabled = isExerciseEntryEnabled
+        self.isSpottingEnabled = isSpottingEnabled
+        self.latestExerciseForName = latestExerciseForName
+        self.exerciseNoteForName = exerciseNoteForName
         self.onDelete = onDelete
         self.onMoveUp = onMoveUp
         self.onMoveDown = onMoveDown
+        self.onSpotHud = onSpotHud
         self.onNameFocusChange = onNameFocusChange
     }
 
@@ -4594,6 +5090,165 @@ struct ExerciseEditorRow: View {
                 .fill(themeColor(.card))
         )
         .zIndex(isNameFocused ? 5 : 1)
+        .sheet(isPresented: $showSpotSheet) {
+            VStack(spacing: 16) {
+                Image(systemName: "person.2.fill")
+                    .font(.system(size: 28, weight: .semibold))
+                    .foregroundStyle(themedPrimaryText())
+                Text("Spotted Set")
+                    .font(.custom("Avenir Next", size: 18))
+                    .fontWeight(.semibold)
+                    .foregroundStyle(themedPrimaryText())
+                Text("Tap the 👥 icon to mark a set as spotted. This helps you remember where you got a spot.")
+                    .font(.custom("Avenir Next", size: 14))
+                    .foregroundStyle(themedSecondaryText())
+                    .multilineTextAlignment(.center)
+                Button("Got it") {
+                    showSpotSheet = false
+                }
+                .font(.custom("Avenir Next", size: 16))
+                .foregroundStyle(themedAccentForeground())
+                .padding(.horizontal, 24)
+                .padding(.vertical, 10)
+                .background(themeColor(.sand))
+                .clipShape(Capsule())
+            }
+            .padding(24)
+            .presentationDetents([.height(260)])
+            .presentationDragIndicator(.visible)
+            .presentationBackground(
+                LinearGradient(
+                    colors: [themeColor(.night), themeColor(.coal)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            )
+            .background(
+                LinearGradient(
+                    colors: [themeColor(.night), themeColor(.coal)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            )
+        }
+        .sheet(isPresented: $showExerciseNotesInfoSheet) {
+            VStack(spacing: 16) {
+                VStack(spacing: 12) {
+                    ZStack {
+                        Circle()
+                            .fill(themeColor(.sand).opacity(0.12))
+                            .frame(width: 56, height: 56)
+                        Image(systemName: "note.text")
+                            .font(.system(size: 22, weight: .semibold))
+                            .foregroundStyle(themedPrimaryText())
+                    }
+                    Text("Exercise Notes")
+                        .font(.custom("Avenir Next", size: 18))
+                        .fontWeight(.semibold)
+                        .foregroundStyle(themedPrimaryText())
+                    Text("Saved with the exercise and shown every time you use it.")
+                        .font(.custom("Avenir Next", size: 14))
+                        .foregroundStyle(themedSecondaryText())
+                        .multilineTextAlignment(.center)
+                }
+                .padding(16)
+                .frame(maxWidth: .infinity)
+                .background(
+                    RoundedRectangle(cornerRadius: 16)
+                        .fill(themeColor(.card).opacity(0.9))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 16)
+                                .stroke(themeColor(.sand).opacity(0.12), lineWidth: 1)
+                        )
+                )
+
+                Button("Got it") {
+                    showExerciseNotesInfoSheet = false
+                }
+                .font(.custom("Avenir Next", size: 16))
+                .foregroundStyle(themedAccentForeground())
+                .padding(.horizontal, 28)
+                .padding(.vertical, 12)
+                .background(themeColor(.sand))
+                .clipShape(Capsule())
+            }
+            .padding(24)
+            .presentationDetents([.height(280)])
+            .presentationDragIndicator(.visible)
+            .presentationBackground(
+                LinearGradient(
+                    colors: [themeColor(.night), themeColor(.coal)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            )
+            .background(
+                LinearGradient(
+                    colors: [themeColor(.night), themeColor(.coal)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            )
+        }
+        .sheet(isPresented: $showExerciseEntryInfoSheet) {
+            VStack(spacing: 16) {
+                VStack(spacing: 12) {
+                    ZStack {
+                        Circle()
+                            .fill(themeColor(.sand).opacity(0.12))
+                            .frame(width: 56, height: 56)
+                        Image(systemName: "square.and.pencil")
+                            .font(.system(size: 22, weight: .semibold))
+                            .foregroundStyle(themedPrimaryText())
+                    }
+                    Text("Exercise Entry")
+                        .font(.custom("Avenir Next", size: 18))
+                        .fontWeight(.semibold)
+                        .foregroundStyle(themedPrimaryText())
+                    Text("Only for this workout. It shows in history for that session.")
+                        .font(.custom("Avenir Next", size: 14))
+                        .foregroundStyle(themedSecondaryText())
+                        .multilineTextAlignment(.center)
+                }
+                .padding(16)
+                .frame(maxWidth: .infinity)
+                .background(
+                    RoundedRectangle(cornerRadius: 16)
+                        .fill(themeColor(.card).opacity(0.9))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 16)
+                                .stroke(themeColor(.sand).opacity(0.12), lineWidth: 1)
+                        )
+                )
+
+                Button("Got it") {
+                    showExerciseEntryInfoSheet = false
+                }
+                .font(.custom("Avenir Next", size: 16))
+                .foregroundStyle(themedAccentForeground())
+                .padding(.horizontal, 28)
+                .padding(.vertical, 12)
+                .background(themeColor(.sand))
+                .clipShape(Capsule())
+            }
+            .padding(24)
+            .presentationDetents([.height(280)])
+            .presentationDragIndicator(.visible)
+            .presentationBackground(
+                LinearGradient(
+                    colors: [themeColor(.night), themeColor(.coal)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            )
+            .background(
+                LinearGradient(
+                    colors: [themeColor(.night), themeColor(.coal)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            )
+        }
         .onAppear {
             lastUnit = draft.weightUnit
             if let knownType {
@@ -4614,13 +5269,14 @@ struct ExerciseEditorRow: View {
             if let knownType {
                 draft.type = knownType
             }
-            if isNotesEnabled, let noteForName,
-               draft.note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                let note = noteForName(draft.name)
+            if isExerciseNotesEnabled, let exerciseNoteForName,
+               draft.exerciseNote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                let note = exerciseNoteForName(draft.name)
                 if !note.isEmpty {
-                    draft.note = note
+                    draft.exerciseNote = note
                 }
             }
+            applyLatestPlaceholders()
         }
         .onChange(of: draft.type) { _, newValue in
             if newValue == .cardio {
@@ -4635,7 +5291,7 @@ struct ExerciseEditorRow: View {
         HStack(alignment: .center, spacing: 12) {
             Text("Exercise")
                 .font(.custom("Avenir Next", size: 15))
-                .foregroundStyle(themeColor(.sand).opacity(0.6))
+                .foregroundStyle(themedSecondaryText())
             if let knownType {
                 typeBadge(for: knownType)
             } else {
@@ -4645,13 +5301,13 @@ struct ExerciseEditorRow: View {
             if let onMoveUp {
                 Button(action: onMoveUp) {
                     Image(systemName: "arrow.up")
-                        .foregroundStyle(themeColor(.sand).opacity(0.7))
+                        .foregroundStyle(themedSecondaryText())
                 }
             }
             if let onMoveDown {
                 Button(action: onMoveDown) {
                     Image(systemName: "arrow.down")
-                        .foregroundStyle(themeColor(.sand).opacity(0.7))
+                        .foregroundStyle(themedSecondaryText())
                 }
             }
             if let onDelete {
@@ -4659,7 +5315,7 @@ struct ExerciseEditorRow: View {
                     onDelete()
                 } label: {
                     Image(systemName: "trash")
-                        .foregroundStyle(themeColor(.sand).opacity(0.8))
+                        .foregroundStyle(themedSecondaryText())
                 }
                 .buttonStyle(.plain)
             }
@@ -4690,8 +5346,11 @@ struct ExerciseEditorRow: View {
                 } else {
                     cardioSection
                 }
-                if isNotesEnabled {
+                if isExerciseNotesEnabled {
                     notesSection
+                }
+                if isExerciseEntryEnabled {
+                    exerciseEntrySection
                 }
             }
         }
@@ -4707,10 +5366,12 @@ struct ExerciseEditorRow: View {
                     isCompact: draft.sets.count > 1,
                     canRemoveSet: draft.sets.count > 1,
                     allowDropSets: isDropSetsEnabled,
+                    allowSpotting: isSpottingEnabled,
                     isBodyweightSegment: isBodyweightSegment,
                     onRemoveSet: {
                         draft.sets.removeAll { $0.id == setId }
-                    }
+                    },
+                    onSpotToggle: handleSpotToggle
                 )
             }
             .animation(.easeInOut(duration: 0.2), value: draft.sets.count)
@@ -4726,7 +5387,7 @@ struct ExerciseEditorRow: View {
                     Text("Add Set")
                 }
                 .font(.custom("Avenir Next", size: 16))
-                .foregroundStyle(themeColor(.sand))
+                .foregroundStyle(themedPrimaryText())
             }
             .buttonStyle(.plain)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -4752,23 +5413,23 @@ struct ExerciseEditorRow: View {
 
     @ViewBuilder
     private var notesSection: some View {
-        let trimmedNote = draft.note.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedNote = draft.exerciseNote.trimmingCharacters(in: .whitespacesAndNewlines)
         VStack(alignment: .leading, spacing: 8) {
-            if draft.isNoteExpanded {
-                Text("Note")
+            if draft.isExerciseNoteExpanded {
+                Text("Exercise Note")
                     .font(.custom("Avenir Next", size: 12))
-                    .foregroundStyle(themeColor(.sand).opacity(0.6))
+                    .foregroundStyle(themedSecondaryText())
                 ZStack(alignment: .topLeading) {
                     if trimmedNote.isEmpty {
-                        Text("Add a note for next time…")
+                        Text("Pain: left shoulder, Seat: 3, Grip: wide")
                             .font(.custom("Avenir Next", size: 13))
-                            .foregroundStyle(themeColor(.sand).opacity(0.4))
+                            .foregroundStyle(themedSecondaryText())
                             .padding(.top, 19)
                             .padding(.leading, 19)
                     }
-                    TextEditor(text: $draft.note)
+                    TextEditor(text: $draft.exerciseNote)
                         .font(.custom("Avenir Next", size: 13))
-                        .foregroundStyle(themeColor(.sand))
+                        .foregroundStyle(themedPrimaryText())
                         .scrollContentBackground(.hidden)
                         .padding(.top, 10)
                         .padding(.leading, 12)
@@ -4786,33 +5447,35 @@ struct ExerciseEditorRow: View {
                 )
 
                 Button {
-                    draft.isNoteExpanded = false
+                    presentExerciseNotesInfoIfNeeded()
+                    draft.isExerciseNoteExpanded = false
                 } label: {
-                    Text(trimmedNote.isEmpty ? "Hide Note" : "Done")
+                    Text(trimmedNote.isEmpty ? "Hide Exercise Note" : "Done")
                         .font(.custom("Avenir Next", size: 14))
-                        .foregroundStyle(themeColor(.sand))
+                        .foregroundStyle(themedPrimaryText())
                 }
                 .buttonStyle(.plain)
             } else if trimmedNote.isEmpty {
                 Button {
-                    draft.isNoteExpanded = true
+                    presentExerciseNotesInfoIfNeeded()
+                    draft.isExerciseNoteExpanded = true
                 } label: {
                     HStack {
                         Image(systemName: "plus.circle")
-                        Text("Add Note")
+                        Text("Add Exercise Note")
                     }
                     .font(.custom("Avenir Next", size: 15))
-                    .foregroundStyle(themeColor(.sand))
+                    .foregroundStyle(themedPrimaryText())
                 }
                 .buttonStyle(.plain)
             } else {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Note")
+                    Text("Exercise Note")
                         .font(.custom("Avenir Next", size: 12))
-                        .foregroundStyle(themeColor(.sand).opacity(0.6))
+                        .foregroundStyle(themedSecondaryText())
                     Text(trimmedNote)
                         .font(.custom("Avenir Next", size: 13))
-                        .foregroundStyle(themeColor(.sand))
+                        .foregroundStyle(themedPrimaryText())
                         .lineLimit(2)
                 }
                 .padding(10)
@@ -4823,14 +5486,105 @@ struct ExerciseEditorRow: View {
                 )
 
                 Button {
-                    draft.isNoteExpanded = true
+                    presentExerciseNotesInfoIfNeeded()
+                    draft.isExerciseNoteExpanded = true
                 } label: {
                     HStack {
                         Image(systemName: "pencil")
-                        Text("Edit Note")
+                        Text("Edit Exercise Note")
                     }
                     .font(.custom("Avenir Next", size: 14))
-                    .foregroundStyle(themeColor(.sand))
+                    .foregroundStyle(themedPrimaryText())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var exerciseEntrySection: some View {
+        let trimmedEntry = draft.exerciseEntry.trimmingCharacters(in: .whitespacesAndNewlines)
+        VStack(alignment: .leading, spacing: 8) {
+            if draft.isExerciseEntryExpanded {
+                Text("Exercise Entry")
+                    .font(.custom("Avenir Next", size: 12))
+                    .foregroundStyle(themedSecondaryText())
+                ZStack(alignment: .topLeading) {
+                    if trimmedEntry.isEmpty {
+                        Text("Today: felt tight, reduced weight, eased tempo")
+                            .font(.custom("Avenir Next", size: 13))
+                            .foregroundStyle(themedSecondaryText())
+                            .padding(.top, 19)
+                            .padding(.leading, 19)
+                    }
+                    TextEditor(text: $draft.exerciseEntry)
+                        .font(.custom("Avenir Next", size: 13))
+                        .foregroundStyle(themedPrimaryText())
+                        .scrollContentBackground(.hidden)
+                        .padding(.top, 10)
+                        .padding(.leading, 12)
+                        .padding(.trailing, 8)
+                        .padding(.bottom, 8)
+                }
+                .frame(minHeight: 80)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(themeColor(.card).opacity(0.85))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(themeColor(.sand).opacity(0.12), lineWidth: 1)
+                        )
+                )
+
+                Button {
+                    presentExerciseEntryInfoIfNeeded()
+                    draft.isExerciseEntryExpanded = false
+                } label: {
+                    Text(trimmedEntry.isEmpty ? "Hide Exercise Entry" : "Done")
+                        .font(.custom("Avenir Next", size: 14))
+                        .foregroundStyle(themedPrimaryText())
+                }
+                .buttonStyle(.plain)
+            } else if trimmedEntry.isEmpty {
+                Button {
+                    presentExerciseEntryInfoIfNeeded()
+                    draft.isExerciseEntryExpanded = true
+                } label: {
+                    HStack {
+                        Image(systemName: "plus.circle")
+                        Text("Add Exercise Entry")
+                    }
+                    .font(.custom("Avenir Next", size: 15))
+                    .foregroundStyle(themedPrimaryText())
+                }
+                .buttonStyle(.plain)
+            } else {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Exercise Entry")
+                        .font(.custom("Avenir Next", size: 12))
+                        .foregroundStyle(themedSecondaryText())
+                    Text(trimmedEntry)
+                        .font(.custom("Avenir Next", size: 13))
+                        .foregroundStyle(themedPrimaryText())
+                        .lineLimit(2)
+                }
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(themeColor(.card).opacity(0.6))
+                )
+
+                Button {
+                    presentExerciseEntryInfoIfNeeded()
+                    draft.isExerciseEntryExpanded = true
+                } label: {
+                    HStack {
+                        Image(systemName: "pencil")
+                        Text("Edit Exercise Entry")
+                    }
+                    .font(.custom("Avenir Next", size: 14))
+                    .foregroundStyle(themedPrimaryText())
                 }
                 .buttonStyle(.plain)
             }
@@ -4844,6 +5598,7 @@ struct ExerciseEditorRow: View {
             }
         }
         .pickerStyle(.segmented)
+        .tint(themedAccent())
         .controlSize(.mini)
         .scaleEffect(0.9)
     }
@@ -4868,7 +5623,9 @@ struct ExerciseEditorRow: View {
                     weight: trimmedWeight.isEmpty ? "" : (value == 0 ? "0" : String(format: "%.1f", converted)),
                     reps: segment.reps,
                     weightPlaceholder: placeholderValue == 0 ? segment.weightPlaceholder : String(format: "%.1f", convertedPlaceholder),
-                    repsPlaceholder: segment.repsPlaceholder
+                    repsPlaceholder: segment.repsPlaceholder,
+                    isSpotted: segment.isSpotted,
+                    isSpottedPlaceholder: segment.isSpottedPlaceholder
                 )
             }
             return WorkoutSetDraft(id: set.id, segments: segments)
@@ -4881,7 +5638,92 @@ struct ExerciseEditorRow: View {
         return value == 0
     }
 
+    private func applyLatestPlaceholders() {
+        let trimmedName = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else { return }
+        guard let latestExercise = latestExerciseForName?(trimmedName) else { return }
 
+        switch latestExercise.type {
+        case .weights:
+            guard draft.type == .weights else { return }
+            let hasAnyInput = draft.sets.contains { set in
+                set.segments.contains {
+                    !$0.weight.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                    !$0.reps.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                }
+            }
+            guard !hasAnyInput else { return }
+
+            let setDrafts = latestExercise.sets.map { set in
+                let segmentDrafts = set.segments.map { segment in
+                    WorkoutSetSegmentDraft(
+                        weight: "",
+                        reps: "",
+                        weightPlaceholder: segment.weightKg == 0
+                            ? "0"
+                            : String(format: "%.1f", weightValue(segment.weightKg, unit: draft.weightUnit)),
+                        repsPlaceholder: "\(segment.reps)",
+                        isSpotted: false,
+                        isSpottedPlaceholder: segment.isSpotted
+                    )
+                }
+                return WorkoutSetDraft(segments: segmentDrafts.isEmpty ? [WorkoutSetSegmentDraft()] : segmentDrafts)
+            }
+            if !setDrafts.isEmpty {
+                draft.sets = setDrafts
+            }
+        case .cardio:
+            guard draft.type == .cardio else { return }
+            if draft.durationMinutes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                draft.durationPlaceholder = formattedDurationValue(latestExercise.durationSeconds)
+            }
+            if draft.calories.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                draft.caloriesPlaceholder = formattedOptionalInt(latestExercise.calories)
+            }
+        }
+    }
+
+    private func weightValue(_ kg: Double, unit: WeightUnit) -> Double {
+        if unit == .lb {
+            return kg * 2.20462262
+        }
+        return kg
+    }
+
+    private func formattedOptionalInt(_ value: Int?) -> String {
+        guard let value else { return "" }
+        return "\(value)"
+    }
+
+    private func handleSpotToggle(isSpotted: Bool) {
+        guard isSpottingEnabled else { return }
+        if !hasShownSpotIntro {
+            markSpotIntroShown()
+            showSpotSheet = true
+            return
+        }
+        onSpotHud?(isSpotted)
+    }
+
+    private var hasShownSpotIntro: Bool {
+        UserDefaults.standard.bool(forKey: Self.spotIntroKey)
+    }
+
+    private func markSpotIntroShown() {
+        UserDefaults.standard.set(true, forKey: Self.spotIntroKey)
+    }
+
+    private func presentExerciseNotesInfoIfNeeded() {
+        guard !UserDefaults.standard.bool(forKey: Self.exerciseNotesInfoKey) else { return }
+        UserDefaults.standard.set(true, forKey: Self.exerciseNotesInfoKey)
+        showExerciseNotesInfoSheet = true
+    }
+
+    private func presentExerciseEntryInfoIfNeeded() {
+        guard !UserDefaults.standard.bool(forKey: Self.exerciseEntryInfoKey) else { return }
+        UserDefaults.standard.set(true, forKey: Self.exerciseEntryInfoKey)
+        showExerciseEntryInfoSheet = true
+    }
 
     private func roundToHalf(_ value: Double) -> Double {
         (value * 2).rounded() / 2
@@ -4890,7 +5732,7 @@ struct ExerciseEditorRow: View {
     private func typeBadge(for type: ExerciseType) -> some View {
         Text(type.label)
             .font(.custom("Avenir Next", size: 12))
-            .foregroundStyle(themeColor(.sand))
+            .foregroundStyle(themedPrimaryText())
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
             .background(
@@ -4902,7 +5744,7 @@ struct ExerciseEditorRow: View {
     private var typePlaceholder: some View {
         Text("Type")
             .font(.custom("Avenir Next", size: 12))
-            .foregroundStyle(themeColor(.sand).opacity(0.5))
+            .foregroundStyle(themedSecondaryText())
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
             .background(
@@ -4943,11 +5785,11 @@ struct WorkoutSessionCard: View {
                 Text("\(session.date.formatted(date: .abbreviated, time: .omitted)) • Session \(sessionNumber)")
                     .font(.custom("Avenir Next", size: 18))
                     .fontWeight(.semibold)
-                    .foregroundStyle(themeColor(.sand))
+                    .foregroundStyle(themedPrimaryText())
                 Spacer()
                 Text("\(mergedExercises.count) exercises")
                     .font(.custom("Avenir Next", size: 12))
-                    .foregroundStyle(themeColor(.sand).opacity(0.6))
+                    .foregroundStyle(themedSecondaryText())
             }
 
             HStack(spacing: 12) {
@@ -4969,7 +5811,7 @@ struct WorkoutSessionCard: View {
                 ForEach(mergedExercises.prefix(3)) { exercise in
                     Text(sessionLine(for: exercise))
                         .font(.custom("Avenir Next", size: 12))
-                        .foregroundStyle(themeColor(.sand).opacity(0.6))
+                        .foregroundStyle(themedSecondaryText())
                 }
             }
         }
@@ -5027,6 +5869,8 @@ struct SessionDetailView: View {
     let session: WorkoutSession
     let weightUnit: WeightUnit
     let onEdit: () -> Void
+    let onDeleteExercise: (WorkoutExercise) -> Void
+    @State private var exerciseToDelete: WorkoutExercise?
 
     var body: some View {
         ZStack {
@@ -5037,19 +5881,42 @@ struct SessionDetailView: View {
             )
             .ignoresSafeArea()
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
+            List {
+                Section {
+                    ForEach(session.mergedExercises()) { exercise in
+                        ExerciseDetailCard(exercise: exercise, weightUnit: weightUnit)
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
+                            .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 8, trailing: 20))
+                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                Button(role: .destructive) {
+                                    exerciseToDelete = exercise
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                            }
+                            .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                                Button {
+                                    onEdit()
+                                } label: {
+                                    Label("Edit", systemImage: "pencil")
+                                }
+                                .tint(themedAccent())
+                            }
+                    }
+                } header: {
                     Text(session.date.formatted(date: .abbreviated, time: .omitted))
                         .font(.custom("Avenir Next", size: 28))
                         .fontWeight(.semibold)
-                        .foregroundStyle(themeColor(.sand))
-
-                    ForEach(session.mergedExercises()) { exercise in
-                        ExerciseDetailCard(exercise: exercise, weightUnit: weightUnit)
-                    }
+                        .foregroundStyle(themedPrimaryText())
+                        .textCase(nil)
+                        .padding(.top, 8)
                 }
-                .padding(24)
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
             }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
         }
         .navigationTitle("Session")
         .navigationBarTitleDisplayMode(.inline)
@@ -5058,8 +5925,24 @@ struct SessionDetailView: View {
                 Button("Edit") {
                     onEdit()
                 }
-                .foregroundStyle(themeColor(.sand))
+                .foregroundStyle(themedPrimaryText())
             }
+        }
+        .alert("Delete Exercise?", isPresented: Binding(
+            get: { exerciseToDelete != nil },
+            set: { if !$0 { exerciseToDelete = nil } }
+        )) {
+            Button("Delete", role: .destructive) {
+                if let exerciseToDelete {
+                    onDeleteExercise(exerciseToDelete)
+                }
+                exerciseToDelete = nil
+            }
+            Button("Cancel", role: .cancel) {
+                exerciseToDelete = nil
+            }
+        } message: {
+            Text("This removes the exercise from this session.")
         }
     }
 }
@@ -5074,20 +5957,22 @@ struct ExerciseDetailCard: View {
                 Text(exercise.name)
                     .font(.custom("Avenir Next", size: 18))
                     .fontWeight(.semibold)
-                    .foregroundStyle(themeColor(.sand))
+                    .foregroundStyle(themedPrimaryText())
                 Spacer()
                 Text(exercise.type.label)
                     .font(.custom("Avenir Next", size: 12))
-                    .foregroundStyle(themeColor(.sand).opacity(0.6))
+                    .foregroundStyle(themedSecondaryText())
             }
 
             switch exercise.type {
             case .weights:
                 VStack(alignment: .leading, spacing: 6) {
                     ForEach(Array(exercise.sets.enumerated()), id: \.element.id) { index, set in
-                        Text("Set \(index + 1): \(segmentLine(for: set.segments))")
-                            .font(.custom("Avenir Next", size: 13))
-                            .foregroundStyle(themeColor(.sand).opacity(0.7))
+                        VStack(alignment: .leading, spacing: 2) {
+                            ForEach(Array(set.segments.enumerated()), id: \.element.id) { segmentIndex, segment in
+                                segmentLineView(setIndex: index, segmentIndex: segmentIndex, segment: segment)
+                            }
+                        }
                     }
                 }
             case .cardio:
@@ -5095,14 +5980,26 @@ struct ExerciseDetailCard: View {
                     if let duration = exercise.durationSeconds, duration > 0 {
                         Text("Duration: \(durationLabel(duration))")
                             .font(.custom("Avenir Next", size: 13))
-                            .foregroundStyle(themeColor(.sand).opacity(0.7))
+                            .foregroundStyle(themedSecondaryText())
                     }
                     if let calories = exercise.calories, calories > 0 {
                         Text("Calories: \(calories) cal")
                             .font(.custom("Avenir Next", size: 13))
-                            .foregroundStyle(themeColor(.sand).opacity(0.7))
+                            .foregroundStyle(themedSecondaryText())
                     }
                 }
+            }
+            if let entry = exercise.exerciseEntry?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !entry.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Exercise Entry")
+                        .font(.custom("Avenir Next", size: 12))
+                        .foregroundStyle(themedSecondaryText())
+                    Text(entry)
+                        .font(.custom("Avenir Next", size: 13))
+                        .foregroundStyle(themedPrimaryText())
+                }
+                .padding(.top, 4)
             }
         }
         .padding(16)
@@ -5121,11 +6018,20 @@ struct ExerciseDetailCard: View {
         formattedWeight(kg, unit: weightUnit)
     }
 
-    private func segmentLine(for segments: [WorkoutSetSegment]) -> String {
-        segments.map { segment in
-            "\(weightLabel(for: segment.weightKg)) x \(segment.reps)"
-        }
-        .joined(separator: " → ")
+    private func segmentLineView(
+        setIndex: Int,
+        segmentIndex: Int,
+        segment: WorkoutSetSegment
+    ) -> some View {
+        let base = "\(weightLabel(for: segment.weightKg)) x \(segment.reps)"
+        let prefix = segmentIndex == 0 ? "Set \(setIndex + 1): " : "  ↳ "
+        let icon = segment.isSpotted
+            ? Text(" ") + Text(Image(systemName: "person.2.fill"))
+                .font(.system(size: 10, weight: .semibold))
+            : Text("")
+        return (Text(prefix + base) + icon)
+            .font(.custom("Avenir Next", size: 13))
+            .foregroundStyle(themedSecondaryText())
     }
 }
 
@@ -5137,11 +6043,11 @@ struct StatCard: View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
                 .font(.custom("Avenir Next", size: 12))
-                .foregroundStyle(themeColor(.sand).opacity(0.6))
+                .foregroundStyle(themedSecondaryText())
             Text(value)
                 .font(.custom("Avenir Next", size: 22))
                 .fontWeight(.semibold)
-                .foregroundStyle(themeColor(.sand))
+                .foregroundStyle(themedPrimaryText())
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -5194,11 +6100,11 @@ struct StatPageView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text(page.title)
                 .font(.custom("Avenir Next", size: 12))
-                .foregroundStyle(themeColor(.sand).opacity(0.6))
+                .foregroundStyle(themedSecondaryText())
             Text(page.value)
                 .font(.custom("Avenir Next", size: 22))
                 .fontWeight(.semibold)
-                .foregroundStyle(themeColor(.sand))
+                .foregroundStyle(themedPrimaryText())
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -5213,7 +6119,7 @@ struct PageDots: View {
         HStack(spacing: 6) {
             ForEach(0..<count, id: \.self) { index in
                 Circle()
-                    .fill(themeColor(.sand).opacity(index == currentIndex ? 0.9 : 0.35))
+                    .fill(themedAccent().opacity(index == currentIndex ? 0.9 : 0.35))
                     .frame(width: index == currentIndex ? 6 : 4, height: index == currentIndex ? 6 : 4)
             }
         }
@@ -5233,7 +6139,7 @@ struct TagView: View {
                 Capsule()
                     .fill(themeColor(.sand).opacity(0.12))
             )
-            .foregroundStyle(themeColor(.sand))
+            .foregroundStyle(themedPrimaryText())
     }
 }
 
@@ -5272,7 +6178,7 @@ struct ExerciseNameField: View {
                 guard let detail = suggestionDetail?(name)?.lowercased() else { return false }
                 return detail.contains(query)
             }
-            .prefix(6)
+            .prefix(10)
             .map { $0 }
     }
 
@@ -5292,13 +6198,13 @@ struct ExerciseNameField: View {
             if showsTitle {
                 Text(title)
                     .font(.custom("Avenir Next", size: 11))
-                    .foregroundStyle(themeColor(.sand).opacity(0.6))
+                    .foregroundStyle(themedSecondaryText())
             }
             VStack(spacing: 6) {
-                TextField("Bicep Curls", text: $text)
+                TextField("Exercise Name", text: $text)
                     .font(.custom("Avenir Next", size: 18))
                     .textInputAutocapitalization(.words)
-                    .foregroundStyle(themeColor(.sand))
+                    .foregroundStyle(themedPrimaryText())
                     .padding(12)
                     .background(
                         RoundedRectangle(cornerRadius: 12)
@@ -5342,7 +6248,7 @@ struct ExerciseNameField: View {
                     Text(group.uppercased())
                         .font(.custom("Avenir Next", size: 11))
                         .fontWeight(.semibold)
-                        .foregroundStyle(themeColor(.sand).opacity(0.75))
+                        .foregroundStyle(themedSecondaryText())
                 }
                 .padding(.top, 6)
                 .padding(.horizontal, 8)
@@ -5350,7 +6256,7 @@ struct ExerciseNameField: View {
                 ForEach(items, id: \.self) { name in
                     Text(name)
                         .font(.custom("Avenir Next", size: 13))
-                        .foregroundStyle(themeColor(.sand))
+                        .foregroundStyle(themedPrimaryText())
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.vertical, 6)
                         .padding(.horizontal, 10)
@@ -5377,17 +6283,17 @@ struct ExerciseLibraryView: View {
     struct ExerciseNoteEntry: Identifiable {
         let id = UUID()
         let name: String
-        let note: String
+        let exerciseNote: String
     }
 
-    private var noteEntries: [ExerciseNoteEntry] {
+    private var exerciseNoteEntries: [ExerciseNoteEntry] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let entries = store.exerciseNotesList().map { entry in
-            ExerciseNoteEntry(name: displayName(for: entry.name), note: entry.note)
+            ExerciseNoteEntry(name: displayName(for: entry.name), exerciseNote: entry.exerciseNote)
         }
         guard !query.isEmpty else { return entries }
         return entries.filter { entry in
-            entry.name.lowercased().contains(query) || entry.note.lowercased().contains(query)
+            entry.name.lowercased().contains(query) || entry.exerciseNote.lowercased().contains(query)
         }
     }
 
@@ -5429,10 +6335,10 @@ struct ExerciseLibraryView: View {
                 Section {
                     HStack {
                         Image(systemName: "magnifyingglass")
-                            .foregroundStyle(themeColor(.sand).opacity(0.6))
+                            .foregroundStyle(themedSecondaryText())
                         TextField("Search exercises", text: $searchText)
                             .font(.custom("Avenir Next", size: 16))
-                            .foregroundStyle(themeColor(.sand))
+                            .foregroundStyle(themedPrimaryText())
                     }
                     .padding(12)
                     .background(
@@ -5445,22 +6351,22 @@ struct ExerciseLibraryView: View {
                     Text("Explore")
                         .font(.custom("Avenir Next", size: 28))
                         .fontWeight(.semibold)
-                        .foregroundStyle(themeColor(.sand))
+                        .foregroundStyle(themedPrimaryText())
                 }
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)
                 .listRowInsets(EdgeInsets(top: 24, leading: 20, bottom: 6, trailing: 20))
 
-                if store.isNotesEnabled, !noteEntries.isEmpty {
+                if store.isExerciseNotesEnabled, !exerciseNoteEntries.isEmpty {
                     Section {
-                        ForEach(noteEntries) { entry in
+                        ForEach(exerciseNoteEntries) { entry in
                             VStack(alignment: .leading, spacing: 6) {
                                 Text(entry.name)
                                     .font(.custom("Avenir Next", size: 16))
-                                    .foregroundStyle(themeColor(.sand))
-                                Text(entry.note)
+                                    .foregroundStyle(themedPrimaryText())
+                                Text(entry.exerciseNote)
                                     .font(.custom("Avenir Next", size: 13))
-                                    .foregroundStyle(themeColor(.sand).opacity(0.7))
+                                    .foregroundStyle(themedSecondaryText())
                             }
                             .padding(14)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -5481,10 +6387,10 @@ struct ExerciseLibraryView: View {
                             Capsule()
                                 .fill(themeColor(.sand).opacity(0.18))
                                 .frame(width: 18, height: 6)
-                            Text("NOTES")
+                            Text("EXERCISE NOTES")
                                 .font(.custom("Avenir Next", size: 13))
                                 .fontWeight(.semibold)
-                                .foregroundStyle(themeColor(.sand).opacity(0.75))
+                                .foregroundStyle(themedSecondaryText())
                         }
                         .padding(.top, 8)
                     }
@@ -5502,11 +6408,11 @@ struct ExerciseLibraryView: View {
                                 HStack {
                                     Text(exercise.name)
                                         .font(.custom("Avenir Next", size: 16))
-                                        .foregroundStyle(themeColor(.sand))
+                                        .foregroundStyle(themedPrimaryText())
                                     Spacer()
                                     Image(systemName: "figure.strengthtraining.traditional")
                                         .font(.custom("Avenir Next", size: 14))
-                                        .foregroundStyle(themeColor(.sand).opacity(0.35))
+                                        .foregroundStyle(themedSecondaryText())
                                 }
                                 .padding(.vertical, 10)
                                 .padding(.horizontal, 14)
@@ -5532,7 +6438,7 @@ struct ExerciseLibraryView: View {
                             Text(group.rawValue.uppercased())
                                 .font(.custom("Avenir Next", size: 13))
                                 .fontWeight(.semibold)
-                                .foregroundStyle(themeColor(.sand).opacity(0.75))
+                                .foregroundStyle(themedSecondaryText())
                         }
                         .padding(.top, 8)
                     }
@@ -5584,12 +6490,12 @@ struct InputCard: View {
             if showsTitle {
                 Text(title)
                     .font(.custom("Avenir Next", size: 12))
-                    .foregroundStyle(themeColor(.sand).opacity(0.75))
+                    .foregroundStyle(themedSecondaryText())
             }
             TextField(placeholder, text: $text)
                 .font(.custom("Avenir Next", size: 14))
                 .keyboardType(keyboard)
-                .foregroundStyle(themeColor(.sand))
+                .foregroundStyle(themedPrimaryText())
                 // .padding(10)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
@@ -5632,7 +6538,7 @@ struct UnitPillAligned: View {
         } label: {
             Text(unit.label)
                 .font(.custom("Avenir Next", size: 13))
-                .foregroundStyle(themeColor(.sand))
+                .foregroundStyle(themedPrimaryText())
                 .frame(width: 44, height: 32)
                 .background(
                     Capsule()
@@ -5656,7 +6562,7 @@ struct SetRemoveButtonAligned: View {
                 .foregroundStyle(.clear)
             Button(role: .destructive, action: action) {
                 Image(systemName: "minus.circle.fill")
-                    .foregroundStyle(themeColor(.sand).opacity(0.7))
+                    .foregroundStyle(themedSecondaryText())
             }
             .frame(width: 32, height: 32)
         }
@@ -5671,9 +6577,42 @@ struct SegmentRemoveButton: View {
     var body: some View {
         Button(role: .destructive, action: action) {
             Image(systemName: "minus.circle.fill")
-                .foregroundStyle(themeColor(.sand).opacity(0.7))
+                .foregroundStyle(themedSecondaryText())
         }
         .frame(width: 24, height: 24)
+        .padding(.top, showsTitle ? 16 : 0)
+    }
+}
+
+struct SpottedToggleButton: View {
+    @Binding var isSpotted: Bool
+    @Binding var isSpottedPlaceholder: Bool
+    let showsTitle: Bool
+    let onToggle: ((Bool) -> Void)?
+
+    var body: some View {
+        let showsPlaceholder = isSpottedPlaceholder && !isSpotted
+        Button {
+            isSpotted.toggle()
+            onToggle?(isSpotted)
+        } label: {
+            Image(systemName: isSpotted ? "person.2.fill" : "person.2")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(isSpotted ? themedPrimaryText() : themedSecondaryText())
+                .frame(width: 32, height: 32)
+                .background(
+                    Capsule()
+                        .fill(themeColor(.sand).opacity(isSpotted ? 0.18 : 0.08))
+                        .overlay(
+                            Capsule()
+                                .stroke(
+                                    style: StrokeStyle(lineWidth: 1, dash: showsPlaceholder ? [3, 3] : [])
+                                )
+                                .foregroundStyle(themeColor(.sand).opacity(isSpotted ? 0.3 : (showsPlaceholder ? 0.3 : 0.12)))
+                        )
+                )
+        }
+        .buttonStyle(.plain)
         .padding(.top, showsTitle ? 16 : 0)
     }
 }
@@ -5684,7 +6623,7 @@ struct SetDeleteAnchor: View {
     var body: some View {
         Button(role: .destructive, action: action) {
             Image(systemName: "trash")
-                .foregroundStyle(themeColor(.sand).opacity(0.7))
+                .foregroundStyle(themedSecondaryText())
         }
         .frame(width: 24, height: 24)
     }
@@ -5696,8 +6635,10 @@ struct SetCardView: View {
     let isCompact: Bool
     let canRemoveSet: Bool
     let allowDropSets: Bool
+    let allowSpotting: Bool
     let isBodyweightSegment: (WorkoutSetSegmentDraft) -> Bool
     let onRemoveSet: () -> Void
+    let onSpotToggle: ((Bool) -> Void)?
     @State private var segmentMidYs: [UUID: CGFloat] = [:]
 
     private var deleteAnchorY: CGFloat? {
@@ -5719,52 +6660,7 @@ struct SetCardView: View {
 
     var body: some View {
         VStack(spacing: 10) {
-            VStack(spacing: 6) {
-                ForEach(Array($set.segments.enumerated()), id: \.element.id) { index, $segment in
-                    let segmentId = $segment.wrappedValue.id
-                    let showsTitle = index == 0
-                    HStack(alignment: .center, spacing: 12) {
-                        if allowDropSets && set.segments.count > 1 {
-                            SegmentRemoveButton(showsTitle: showsTitle) {
-                                set.segments.removeAll { $0.id == segmentId }
-                            }
-                        }
-                        InputCard(
-                            title: "Reps",
-                            text: $segment.reps,
-                            placeholder: segment.repsPlaceholder.isEmpty ? "10" : segment.repsPlaceholder,
-                            keyboard: .numberPad,
-                            showsTitle: showsTitle
-                        )
-                        InputCard(
-                            title: "Weight",
-                            text: $segment.weight,
-                            placeholder: segment.weightPlaceholder.isEmpty ? "10" : segment.weightPlaceholder,
-                            keyboard: .decimalPad,
-                            showsTitle: showsTitle
-                        )
-                                if isBodyweightSegment(segment) {
-                                    BodyweightPillAligned(isCompact: isCompact, showsTitle: showsTitle)
-                                } else {
-                                    UnitPillAligned(unit: $weightUnit, showsTitle: showsTitle)
-                                }
-                        if canRemoveSet {
-                            SetDeleteAnchorSpacer()
-                        }
-                    }
-                    .background(
-                        GeometryReader { proxy in
-                            Color.clear.preference(
-                                key: SegmentMidYPreferenceKey.self,
-                                value: [segmentId: proxy.frame(in: .named("setCard")).midY]
-                            )
-                        }
-                    )
-                }
-            }
-            .onPreferenceChange(SegmentMidYPreferenceKey.self) { value in
-                segmentMidYs = value
-            }
+            segmentsList
 
             if allowDropSets {
                 Button {
@@ -5775,7 +6671,7 @@ struct SetCardView: View {
                         Text("Add Drop")
                     }
                     .font(.custom("Avenir Next", size: 14))
-                    .foregroundStyle(themeColor(.sand))
+                    .foregroundStyle(themedPrimaryText())
                 }
                 .buttonStyle(.plain)
                 .frame(maxWidth: .infinity, alignment: .trailing)
@@ -5794,6 +6690,73 @@ struct SetCardView: View {
                     .padding(.trailing, 0)
             }
         }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            dismissKeyboard()
+        }
+    }
+
+    private var segmentsList: some View {
+        VStack(spacing: 6) {
+            ForEach(Array($set.segments.enumerated()), id: \.element.id) { index, $segment in
+                segmentRow(index: index, segment: $segment)
+            }
+        }
+        .onPreferenceChange(SegmentMidYPreferenceKey.self) { value in
+            segmentMidYs = value
+        }
+    }
+
+    private func segmentRow(index: Int, segment: Binding<WorkoutSetSegmentDraft>) -> some View {
+        let segmentId = segment.wrappedValue.id
+        let showsTitle = index == 0
+        let segmentValue = segment.wrappedValue
+
+        return HStack(alignment: .center, spacing: 12) {
+            if allowDropSets && set.segments.count > 1 {
+                SegmentRemoveButton(showsTitle: showsTitle) {
+                    set.segments.removeAll { $0.id == segmentId }
+                }
+            }
+            InputCard(
+                title: "Reps",
+                text: segment.reps,
+                placeholder: segmentValue.repsPlaceholder.isEmpty ? "10" : segmentValue.repsPlaceholder,
+                keyboard: .numberPad,
+                showsTitle: showsTitle
+            )
+            InputCard(
+                title: "Weight",
+                text: segment.weight,
+                placeholder: segmentValue.weightPlaceholder.isEmpty ? "10" : segmentValue.weightPlaceholder,
+                keyboard: .decimalPad,
+                showsTitle: showsTitle
+            )
+            if isBodyweightSegment(segmentValue) {
+                BodyweightPillAligned(isCompact: isCompact, showsTitle: showsTitle)
+            } else {
+                UnitPillAligned(unit: $weightUnit, showsTitle: showsTitle)
+            }
+            if allowSpotting {
+                SpottedToggleButton(
+                    isSpotted: segment.isSpotted,
+                    isSpottedPlaceholder: segment.isSpottedPlaceholder,
+                    showsTitle: showsTitle,
+                    onToggle: onSpotToggle
+                )
+            }
+            if canRemoveSet {
+                SetDeleteAnchorSpacer()
+            }
+        }
+        .background(
+            GeometryReader { proxy in
+                Color.clear.preference(
+                    key: SegmentMidYPreferenceKey.self,
+                    value: [segmentId: proxy.frame(in: .named("setCard")).midY]
+                )
+            }
+        )
     }
 }
 
@@ -5827,7 +6790,7 @@ struct BodyweightPillAligned: View {
                 if isCompact {
                     Text("BW")
                         .font(.custom("Avenir Next", size: 13))
-                        .foregroundStyle(themeColor(.sand))
+                        .foregroundStyle(themedPrimaryText())
                         .frame(width: 44, height: 32)
                         .background(
                             Capsule()
@@ -5841,7 +6804,7 @@ struct BodyweightPillAligned: View {
                 } else {
                     Text("Bodyweight")
                         .font(.custom("Avenir Next", size: 13))
-                        .foregroundStyle(themeColor(.sand))
+                        .foregroundStyle(themedPrimaryText())
                         .lineLimit(1)
                         .minimumScaleFactor(0.9)
                         .frame(minWidth: 88, minHeight: 32)
@@ -5883,10 +6846,10 @@ struct EmptyStateView: View {
             Text("No workouts yet")
                 .font(.custom("Avenir Next", size: 20))
                 .fontWeight(.semibold)
-                .foregroundStyle(themeColor(.sand))
+                .foregroundStyle(themedPrimaryText())
             Text("Add a workout or create a template to get started.")
                 .font(.custom("Avenir Next", size: 14))
-                .foregroundStyle(themeColor(.sand).opacity(0.6))
+                .foregroundStyle(themedSecondaryText())
         }
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -5910,11 +6873,11 @@ struct TemplateCard: View {
                 Text(template.title)
                     .font(.custom("Avenir Next", size: 16))
                     .fontWeight(.semibold)
-                    .foregroundStyle(themeColor(.sand))
+                    .foregroundStyle(themedPrimaryText())
                 if let first = template.exercises.first {
                     Text("Starts with \(first.name)")
                         .font(.custom("Avenir Next", size: 12))
-                        .foregroundStyle(themeColor(.sand).opacity(0.6))
+                        .foregroundStyle(themedSecondaryText())
                         .lineLimit(1)
                         .truncationMode(.tail)
                 }
@@ -6279,6 +7242,16 @@ struct AddTemplateView: View {
         return !trimmedTitle.isEmpty && validExercises.count == drafts.count && validExercises.count >= 2
     }
 
+    private func normalizedTemplateTitle(_ value: String) -> String {
+        let leadingCount = value.prefix { $0.isWhitespace }.count
+        let trailingCount = value.reversed().prefix { $0.isWhitespace }.count
+        let core = value.dropFirst(leadingCount).dropLast(trailingCount)
+        let normalizedCore = core.lowercased().capitalized
+        return String(repeating: " ", count: leadingCount)
+            + normalizedCore
+            + String(repeating: " ", count: trailingCount)
+    }
+
     var body: some View {
         ZStack {
             LinearGradient(
@@ -6301,6 +7274,12 @@ struct AddTemplateView: View {
                         .padding(.leading, 24)
                         .padding(.trailing, 16)
                         .padding(.bottom, 12)
+                        .onChange(of: title) { _, newValue in
+                            let normalized = normalizedTemplateTitle(newValue)
+                            if normalized != newValue {
+                                title = normalized
+                            }
+                        }
                 }
 
                 templateList
@@ -6356,6 +7335,10 @@ struct AddTemplateView: View {
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
             isKeyboardVisible = false
         }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            dismissKeyboard()
+        }
     }
 
     private var templateList: some View {
@@ -6368,8 +7351,11 @@ struct AddTemplateView: View {
                     showsMetrics: false,
                     knownType: store.exerciseType(for: draft.name),
                     isDropSetsEnabled: store.isDropSetsEnabled,
-                    isNotesEnabled: store.isNotesEnabled,
-                    noteForName: nil,
+                    isExerciseNotesEnabled: store.isExerciseNotesEnabled,
+                    isExerciseEntryEnabled: store.isExerciseEntryEnabled,
+                    isSpottingEnabled: store.isSpottingEnabled,
+                    latestExerciseForName: { store.latestExerciseRecord(named: $0)?.exercise },
+                    exerciseNoteForName: nil,
                     onDelete: {
                         removeDraft(with: draft.id)
                     },
@@ -6414,7 +7400,7 @@ struct AddTemplateView: View {
         .listStyle(.plain)
         .listRowSeparator(.hidden)
         .scrollContentBackground(.hidden)
-        .scrollDisabled(isNameFocused)
+        .scrollDismissesKeyboard(.interactively)
         .environment(\.editMode, $editMode)
     }
 
@@ -6465,6 +7451,16 @@ struct EditTemplateView: View {
         return !trimmedTitle.isEmpty && validExercises.count == drafts.count && validExercises.count >= 2
     }
 
+    private func normalizedTemplateTitle(_ value: String) -> String {
+        let leadingCount = value.prefix { $0.isWhitespace }.count
+        let trailingCount = value.reversed().prefix { $0.isWhitespace }.count
+        let core = value.dropFirst(leadingCount).dropLast(trailingCount)
+        let normalizedCore = core.lowercased().capitalized
+        return String(repeating: " ", count: leadingCount)
+            + normalizedCore
+            + String(repeating: " ", count: trailingCount)
+    }
+
     var body: some View {
         ZStack {
             LinearGradient(
@@ -6489,6 +7485,12 @@ struct EditTemplateView: View {
                         .padding(.leading, 24)
                         .padding(.trailing, 16)
                         .padding(.bottom, 12)
+                        .onChange(of: title) { _, newValue in
+                            let normalized = normalizedTemplateTitle(newValue)
+                            if normalized != newValue {
+                                title = normalized
+                            }
+                        }
                 }
 
                 List {
@@ -6500,15 +7502,18 @@ struct EditTemplateView: View {
                             showsMetrics: false,
                             knownType: store.exerciseType(for: draft.name),
                             isDropSetsEnabled: store.isDropSetsEnabled,
-                    isNotesEnabled: store.isNotesEnabled,
-                    noteForName: nil,
-                    onDelete: {
+                            isExerciseNotesEnabled: store.isExerciseNotesEnabled,
+                            isExerciseEntryEnabled: store.isExerciseEntryEnabled,
+                            isSpottingEnabled: store.isSpottingEnabled,
+                            latestExerciseForName: { store.latestExerciseRecord(named: $0)?.exercise },
+                            exerciseNoteForName: nil,
+                            onDelete: {
                                 removeDraft(with: draft.id)
                             },
-                    onMoveUp: nil,
-                    onMoveDown: nil,
-                    onNameFocusChange: { isNameFocused = $0 }
-                )
+                            onMoveUp: nil,
+                            onMoveDown: nil,
+                            onNameFocusChange: { isNameFocused = $0 }
+                        )
                         .listRowInsets(EdgeInsets(top: 4, leading: 24, bottom: 4, trailing: 16))
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
@@ -6546,7 +7551,7 @@ struct EditTemplateView: View {
                 .listStyle(.plain)
                 .listRowSeparator(.hidden)
                 .scrollContentBackground(.hidden)
-                .scrollDisabled(isNameFocused)
+                .scrollDismissesKeyboard(.interactively)
                 .environment(\.editMode, $editMode)
 
                 if validExercises.count < 2 {
@@ -6599,6 +7604,10 @@ struct EditTemplateView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
             isKeyboardVisible = false
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            dismissKeyboard()
         }
     }
 
