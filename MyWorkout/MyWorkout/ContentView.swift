@@ -14,6 +14,137 @@ import PhotosUI
 import AVFoundation
 import CoreImage.CIFilterBuiltins
 
+// MARK: - Design System Constants
+private struct DesignSystem {
+    // MARK: - Spacing
+    struct Spacing {
+        static let xs: CGFloat = 4
+        static let sm: CGFloat = 8
+        static let md: CGFloat = 12
+        static let lg: CGFloat = 16
+        static let xl: CGFloat = 18
+        static let xxl: CGFloat = 22
+        static let xxxl: CGFloat = 24
+        static let huge: CGFloat = 28
+        static let massive: CGFloat = 34
+        static let giant: CGFloat = 120
+    }
+    
+    // MARK: - Corner Radius
+    struct CornerRadius {
+        static let xs: CGFloat = 10
+        static let sm: CGFloat = 12
+        static let md: CGFloat = 14
+        static let lg: CGFloat = 16
+        static let xl: CGFloat = 18
+        static let xxl: CGFloat = 20
+    }
+    
+    // MARK: - Font Sizes
+    struct FontSize {
+        static let caption: CGFloat = 12
+        static let footnote: CGFloat = 13
+        static let body: CGFloat = 14
+        static let callout: CGFloat = 15
+        static let subheadline: CGFloat = 16
+        static let headline: CGFloat = 18
+        static let title3: CGFloat = 28
+        static let title2: CGFloat = 30
+        static let title1: CGFloat = 34
+    }
+    
+    // MARK: - Frame Sizes
+    struct FrameSize {
+        static let logoSize: CGFloat = 70
+        static let minCardHeight: CGFloat = 80
+        static let chartHeight: CGFloat = 220
+        static let consistencyChartHeight: CGFloat = 200
+    }
+}
+
+// MARK: - Reusable View Modifiers
+private struct CardBackground: ViewModifier {
+    let cornerRadius: CGFloat
+    let opacity: Double
+    let hasStroke: Bool
+    
+    init(cornerRadius: CGFloat = DesignSystem.CornerRadius.xl, opacity: Double = 0.9, hasStroke: Bool = true) {
+        self.cornerRadius = cornerRadius
+        self.opacity = opacity
+        self.hasStroke = hasStroke
+    }
+    
+    func body(content: Content) -> some View {
+        content
+            .background(
+                RoundedRectangle(cornerRadius: cornerRadius)
+                    .fill(themeColor(.card).opacity(adjustedOpacity))
+                    .overlay(
+                        hasStroke ? RoundedRectangle(cornerRadius: cornerRadius)
+                            .stroke(themeColor(.sand).opacity(0.08), lineWidth: 1) : nil
+                    )
+            )
+    }
+    
+    private var adjustedOpacity: Double {
+        // Use higher opacity for light theme to create better contrast
+        ThemeStore.shared.selectedTheme == .studioMinimal ? min(opacity + 0.1, 1.0) : opacity
+    }
+}
+
+private extension View {
+    func cardBackground(cornerRadius: CGFloat = DesignSystem.CornerRadius.xl, opacity: Double = 0.9, hasStroke: Bool = true) -> some View {
+        modifier(CardBackground(cornerRadius: cornerRadius, opacity: opacity, hasStroke: hasStroke))
+    }
+    
+    func themedSegmentedPicker() -> some View {
+        self
+            .pickerStyle(.segmented)
+            .background(
+                RoundedRectangle(cornerRadius: DesignSystem.CornerRadius.sm)
+                    .fill(segmentedPickerBackground())
+            )
+            .tint(segmentedPickerTint())
+            .foregroundColor(segmentedPickerForeground())
+    }
+    
+    func themedToggle() -> some View {
+        self
+            .tint(themedAccent())
+            .environment(\.colorScheme, ThemeStore.shared.selectedTheme == .studioMinimal ? .light : .dark)
+    }
+}
+
+// MARK: - Segmented Picker Theme Colors
+private func segmentedPickerBackground() -> Color {
+    ThemeStore.shared.selectedTheme == .studioMinimal
+        ? Color.gray.opacity(0.15)
+        : themeColor(.card).opacity(0.3)
+}
+
+private func segmentedPickerTint() -> Color {
+    ThemeStore.shared.selectedTheme == .studioMinimal
+        ? themeColor(.coal)
+        : themedAccent()
+}
+
+private func segmentedPickerForeground() -> Color {
+    ThemeStore.shared.selectedTheme == .studioMinimal
+        ? themeColor(.sand)
+        : themedPrimaryText()
+}
+
+private func applySegmentedAppearance() {
+    let theme = ThemeStore.shared.selectedTheme
+    let normalText = UIColor(themeColor(.sand))
+    let selectedText = UIColor(theme == .studioMinimal ? themeColor(.sand) : themeColor(.night))
+    let appearance = UISegmentedControl.appearance()
+    appearance.setTitleTextAttributes([.foregroundColor: normalText], for: .normal)
+    appearance.setTitleTextAttributes([.foregroundColor: selectedText], for: .selected)
+    appearance.selectedSegmentTintColor = UIColor(segmentedPickerTint())
+    appearance.backgroundColor = UIColor(segmentedPickerBackground())
+}
+
 enum ExerciseType: String, Codable, CaseIterable {
     case weights
     case cardio
@@ -141,7 +272,7 @@ private func themedPrimaryText() -> Color {
 
 private func themedSecondaryText() -> Color {
     ThemeStore.shared.selectedTheme == .studioMinimal
-        ? themeColor(.sand).opacity(0.7)
+        ? themeColor(.sand).opacity(0.85)  // Increased from 0.7 to 0.85 for better contrast
         : themeColor(.sand).opacity(0.6)
 }
 
@@ -151,7 +282,7 @@ private func themedAccent() -> Color {
 
 private func themedAccentMuted() -> Color {
     ThemeStore.shared.selectedTheme == .studioMinimal
-        ? themeColor(.sand).opacity(0.65)
+        ? themeColor(.sand).opacity(0.75)  // Increased from 0.65 to 0.75
         : themeColor(.sand).opacity(0.7)
 }
 
@@ -1721,6 +1852,7 @@ final class WorkoutStore: ObservableObject {
 struct ContentView: View {
     @StateObject private var store = WorkoutStore()
     @AppStorage("selectedTab") private var selectedTab = 0
+    @ObservedObject private var themeStore = ThemeStore.shared
 
     var body: some View {
         TabView(selection: $selectedTab) {
@@ -1753,6 +1885,12 @@ struct ContentView: View {
                     Label("Settings", systemImage: "gearshape.fill")
                 }
                 .tag(4)
+        }
+        .onAppear {
+            applySegmentedAppearance()
+        }
+        .onChange(of: themeStore.selectedTheme) { _, _ in
+            applySegmentedAppearance()
         }
     }
 }
@@ -1790,22 +1928,22 @@ struct HomeView: View {
                 header
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
-                    .listRowInsets(EdgeInsets(top: 28, leading: 22, bottom: 8, trailing: 22))
+                    .listRowInsets(EdgeInsets(top: DesignSystem.Spacing.huge, leading: DesignSystem.Spacing.xxl, bottom: DesignSystem.Spacing.sm, trailing: DesignSystem.Spacing.xxl))
 
                 stats
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
-                    .listRowInsets(EdgeInsets(top: 0, leading: 22, bottom: 18, trailing: 22))
+                    .listRowInsets(EdgeInsets(top: 0, leading: DesignSystem.Spacing.xxl, bottom: DesignSystem.Spacing.xl, trailing: DesignSystem.Spacing.xxl))
 
                 templatesSection
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
-                    .listRowInsets(EdgeInsets(top: 0, leading: 22, bottom: 18, trailing: 22))
+                    .listRowInsets(EdgeInsets(top: 0, leading: DesignSystem.Spacing.xxl, bottom: DesignSystem.Spacing.xl, trailing: DesignSystem.Spacing.xxl))
 
                 exercisesSection
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
-                    .listRowInsets(EdgeInsets(top: 0, leading: 22, bottom: 24, trailing: 22))
+                    .listRowInsets(EdgeInsets(top: 0, leading: DesignSystem.Spacing.xxl, bottom: DesignSystem.Spacing.xxxl, trailing: DesignSystem.Spacing.xxl))
 
             }
             .listStyle(.plain)
@@ -1945,26 +2083,44 @@ struct HomeView: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .center, spacing: 12) {
+        VStack(alignment: .leading, spacing: DesignSystem.Spacing.xs) {
+            HStack(alignment: .center, spacing: DesignSystem.Spacing.md) {
                 Image("logo")
                     .resizable()
                     .scaledToFit()
-                    .frame(width: 70, height: 70)
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .frame(width: DesignSystem.FrameSize.logoSize, height: DesignSystem.FrameSize.logoSize)
+                    .clipShape(RoundedRectangle(cornerRadius: DesignSystem.CornerRadius.xs, style: .continuous))
                 Text("MyWorkout")
-                    .font(.custom("Avenir Next", size: 34))
+                    .font(.custom("Avenir Next", size: DesignSystem.FontSize.title1))
                     .fontWeight(.semibold)
                     .foregroundStyle(themedPrimaryText())
                 Spacer()
             }
             Text("Track what you lift, keep it simple.")
-                .font(.custom("Avenir Next", size: 16))
+                .font(.custom("Avenir Next", size: DesignSystem.FontSize.subheadline))
                 .foregroundStyle(themedSecondaryText())
         }
     }
 
     private var stats: some View {
+        let statsData = calculateStats()
+        return HStack(spacing: DesignSystem.Spacing.md) {
+            StatPager(
+                pages: [
+                    StatPage(title: "Current Streak", value: "\(statsData.currentStreak)"),
+                    StatPage(title: "Max Streak", value: "\(statsData.maxStreak)")
+                ]
+            )
+            StatPager(
+                pages: [
+                    StatPage(title: "Today's Sets", value: "\(statsData.todaySets)"),
+                    StatPage(title: "Total Sets", value: "\(statsData.totalSets)")
+                ]
+            )
+        }
+    }
+    
+    private func calculateStats() -> (currentStreak: Int, maxStreak: Int, totalSets: Int, todaySets: Int) {
         let currentStreak = currentWorkoutStreak()
         let maxStreak = maxWorkoutStreak()
         let totalSets = store.sessions.reduce(0) { total, session in
@@ -1975,20 +2131,7 @@ struct HomeView: View {
             .reduce(0) { total, session in
                 total + session.mergedExercises().filter { $0.type == .weights }.reduce(0) { $0 + $1.sets.count }
             }
-        return HStack(spacing: 12) {
-            StatPager(
-                pages: [
-                    StatPage(title: "Current Streak", value: "\(currentStreak)"),
-                    StatPage(title: "Max Streak", value: "\(maxStreak)")
-                ]
-            )
-            StatPager(
-                pages: [
-                    StatPage(title: "Today's Sets", value: "\(todaySets)"),
-                    StatPage(title: "Total Sets", value: "\(totalSets)")
-                ]
-            )
-        }
+        return (currentStreak, maxStreak, totalSets, todaySets)
     }
 
     private func workoutDays() -> [Date] {
@@ -2043,10 +2186,10 @@ struct HomeView: View {
     }
 
     private var templatesSection: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: DesignSystem.Spacing.lg) {
             HStack {
                 Text("Templates")
-                    .font(.custom("Avenir Next", size: 18))
+                    .font(.custom("Avenir Next", size: DesignSystem.FontSize.headline))
                     .fontWeight(.semibold)
                     .foregroundStyle(themedPrimaryText())
                 Spacer()
@@ -2069,18 +2212,20 @@ struct HomeView: View {
                     }
                 } label: {
                     Image(systemName: "plus")
-                        .font(.custom("Avenir Next", size: 16))
+                        .font(.custom("Avenir Next", size: DesignSystem.FontSize.subheadline))
                         .foregroundStyle(themedPrimaryText())
                 }
+                .accessibilityLabel("Template options")
+                .accessibilityHint("Add new template, import template, or scan QR code")
             }
 
             if store.templates.isEmpty {
                 Text("Create a template to reuse your go-to workouts.")
-                    .font(.custom("Avenir Next", size: 14))
+                    .font(.custom("Avenir Next", size: DesignSystem.FontSize.body))
                     .foregroundStyle(themedSecondaryText())
             } else {
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 12) {
+                    HStack(spacing: DesignSystem.Spacing.md) {
                         ForEach(store.templates) { template in
                             TemplateCard(
                                 template: template,
@@ -2106,23 +2251,23 @@ struct HomeView: View {
                             )
                         }
                     }
-                    .padding(.vertical, 4)
+                    .padding(.vertical, DesignSystem.Spacing.xs)
                 }
             }
         }
     }
 
     private var exercisesSection: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: DesignSystem.Spacing.md) {
             Text("Quick Start")
-                .font(.custom("Avenir Next", size: 18))
+                .font(.custom("Avenir Next", size: DesignSystem.FontSize.headline))
                 .fontWeight(.semibold)
                 .foregroundStyle(themedPrimaryText())
 
             let recentExercises = recentWorkoutExercises(limit: 8)
             if recentExercises.isEmpty {
                 Text("No exercises yet. Add a workout to start your log.")
-                    .font(.custom("Avenir Next", size: 14))
+                    .font(.custom("Avenir Next", size: DesignSystem.FontSize.body))
                     .foregroundStyle(themedSecondaryText())
             } else {
                 ForEach(recentExercises, id: \.self) { name in
@@ -2188,15 +2333,17 @@ struct HomeView: View {
                 Image(systemName: "plus.circle.fill")
                 Text("Add Workout")
             }
-            .font(.custom("Avenir Next", size: 18))
-            .padding(.vertical, 12)
+            .font(.custom("Avenir Next", size: DesignSystem.FontSize.headline))
+            .padding(.vertical, DesignSystem.Spacing.md)
             .frame(maxWidth: .infinity)
             .foregroundStyle(themedAccentForeground())
             .background(themeColor(.sand))
             .clipShape(Capsule())
-            .padding(.horizontal, 24)
-            .padding(.bottom, 12)
+            .padding(.horizontal, DesignSystem.Spacing.xxxl)
+            .padding(.bottom, DesignSystem.Spacing.md)
         }
+        .accessibilityLabel("Add new workout")
+        .accessibilityHint("Opens the workout creation screen")
         .background(themeColor(.night).opacity(0.001))
     }
 }
@@ -2215,7 +2362,7 @@ struct HistoryView: View {
                     endPoint: .bottomTrailing
                 )
                 .ignoresSafeArea()
-
+                
                 List {
                     Section {
                         if store.sessions.isEmpty {
@@ -2223,24 +2370,24 @@ struct HistoryView: View {
                                 .listRowBackground(Color.clear)
                                 .listRowSeparator(.hidden)
                                 .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 12, trailing: 20))
-                    } else {
-                        ForEach(store.sessions) { session in
-                            Button {
-                                path.append(session.id)
-                            } label: {
-                                WorkoutSessionCard(
-                                    session: session,
-                                    sessionNumber: sessionNumbers[session.id] ?? 1,
-                                    onEdit: { editingSession = session },
-                                    onDelete: { store.removeSession(session) },
-                                    onSaveTemplate: { store.addTemplate(from: session) }
-                                )
-                            }
-                            .buttonStyle(.plain)
-                            .transition(.move(edge: .top).combined(with: .opacity))
-                            .listRowBackground(Color.clear)
-                            .listRowSeparator(.hidden)
-                            .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 12, trailing: 20))
+                        } else {
+                            ForEach(store.sessions) { session in
+                                Button {
+                                    path.append(session.id)
+                                } label: {
+                                    WorkoutSessionCard(
+                                        session: session,
+                                        sessionNumber: sessionNumbers[session.id] ?? 1,
+                                        onEdit: { editingSession = session },
+                                        onDelete: { store.removeSession(session) },
+                                        onSaveTemplate: { store.addTemplate(from: session) }
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                                .transition(.move(edge: .top).combined(with: .opacity))
+                                .listRowBackground(Color.clear)
+                                .listRowSeparator(.hidden)
+                                .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 12, trailing: 20))
                                 .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                                     Button(role: .destructive) {
                                         store.removeSession(session)
@@ -2260,7 +2407,7 @@ struct HistoryView: View {
                         }
                     } header: {
                         Text("History")
-                            .font(.custom("Avenir Next", size: 28))
+                            .font(.custom("Avenir Next", size: DesignSystem.FontSize.title3))
                             .fontWeight(.semibold)
                             .foregroundStyle(themedPrimaryText())
                     }
@@ -2336,9 +2483,9 @@ struct SettingsView: View {
             .ignoresSafeArea()
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: DesignSystem.Spacing.lg) {
                     Text("Settings")
-                        .font(.custom("Avenir Next", size: 30))
+                        .font(.custom("Avenir Next", size: DesignSystem.FontSize.title2))
                         .fontWeight(.semibold)
                         .foregroundStyle(themedPrimaryText())
 
@@ -2403,17 +2550,17 @@ struct SettingsView: View {
     }
 
     private var preferencesCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: DesignSystem.Spacing.md) {
             Text("Preferences")
-                .font(.custom("Avenir Next", size: 14))
+                .font(.custom("Avenir Next", size: DesignSystem.FontSize.body))
                 .foregroundStyle(themedSecondaryText())
 
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: DesignSystem.Spacing.xs) {
                 Text("Session Window")
-                    .font(.custom("Avenir Next", size: 15))
+                    .font(.custom("Avenir Next", size: DesignSystem.FontSize.callout))
                     .foregroundStyle(themedPrimaryText())
                 Text("Workouts logged within this window merge into the same session.")
-                    .font(.custom("Avenir Next", size: 12))
+                    .font(.custom("Avenir Next", size: DesignSystem.FontSize.caption))
                     .foregroundStyle(themedSecondaryText())
                 Picker("Session Window", selection: $sessionWindowSelection) {
                     ForEach(SessionMergeWindowOption.allCases, id: \.self) { option in
@@ -2437,93 +2584,85 @@ struct SettingsView: View {
             Divider()
                 .overlay(themeColor(.sand).opacity(0.12))
 
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: DesignSystem.Spacing.sm) {
                 Text("Default Weight Unit")
-                    .font(.custom("Avenir Next", size: 15))
+                    .font(.custom("Avenir Next", size: DesignSystem.FontSize.callout))
                     .foregroundStyle(themedPrimaryText())
                 Picker("Default Weight Unit", selection: $store.defaultWeightUnit) {
                     ForEach(WeightUnit.allCases, id: \.self) { unit in
                         Text(unit.label).tag(unit)
                     }
                 }
-                .pickerStyle(.segmented)
-                .tint(themedAccent())
+                .themedSegmentedPicker()
             }
 
             Divider()
                 .overlay(themeColor(.sand).opacity(0.12))
 
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: DesignSystem.Spacing.sm) {
                 Text("Theme")
-                    .font(.custom("Avenir Next", size: 15))
+                    .font(.custom("Avenir Next", size: DesignSystem.FontSize.callout))
                     .foregroundStyle(themedPrimaryText())
                 Picker("Theme", selection: $themeStore.selectedTheme) {
                     ForEach(AppTheme.allCases, id: \.self) { theme in
                         Text(theme.label).tag(theme)
                     }
                 }
-                .pickerStyle(.segmented)
-                .tint(themedAccent())
+                .themedSegmentedPicker()
             }
 
         }
-        .padding(16)
+        .padding(DesignSystem.Spacing.lg)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 18)
-                .fill(themeColor(.card).opacity(0.9))
-        )
+        .cardBackground()
     }
 
     private var featureControlsCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: DesignSystem.Spacing.md) {
             Text("Feature Controls")
-                .font(.custom("Avenir Next", size: 14))
+                .font(.custom("Avenir Next", size: DesignSystem.FontSize.body))
                 .foregroundStyle(themedSecondaryText())
             Text("Toggle optional tools on or off to keep workouts simple or add extra detail.")
-                .font(.custom("Avenir Next", size: 12))
+                .font(.custom("Avenir Next", size: DesignSystem.FontSize.caption))
                 .foregroundStyle(themedSecondaryText())
 
             Toggle(isOn: $store.isDropSetsEnabled) {
                 Text("Drop Sets")
-                    .font(.custom("Avenir Next", size: 16))
-                    .foregroundStyle(themedPrimaryText())
+                    .font(.custom("Avenir Next", size: DesignSystem.FontSize.subheadline))
+                    .foregroundStyle(Color.primary)
             }
-            .tint(themedAccent())
+            .themedToggle()
 
             Toggle(isOn: $store.isExerciseNotesEnabled) {
                 Text("Exercise Notes")
-                    .font(.custom("Avenir Next", size: 16))
-                    .foregroundStyle(themedPrimaryText())
+                    .font(.custom("Avenir Next", size: DesignSystem.FontSize.subheadline))
+                    .foregroundStyle(Color.primary)
             }
-            .tint(themedAccent())
+            .themedToggle()
 
             Toggle(isOn: $store.isExerciseEntryEnabled) {
                 Text("Exercise Entry")
-                    .font(.custom("Avenir Next", size: 16))
-                    .foregroundStyle(themedPrimaryText())
+                    .font(.custom("Avenir Next", size: DesignSystem.FontSize.subheadline))
+                    .foregroundStyle(Color.primary)
             }
-            .tint(themedAccent())
+            .themedToggle()
 
             Toggle(isOn: $store.isSpottingEnabled) {
                 Text("Spotted Sets")
-                    .font(.custom("Avenir Next", size: 16))
-                    .foregroundStyle(themedPrimaryText())
+                    .font(.custom("Avenir Next", size: DesignSystem.FontSize.subheadline))
+                    .foregroundStyle(Color.primary)
             }
-            .tint(themedAccent())
+            .themedToggle()
         }
-        .padding(16)
+        .padding(DesignSystem.Spacing.lg)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 18)
-                .fill(themeColor(.card).opacity(0.9))
-        )
+        .cardBackground()
     }
 
     private var dataCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: DesignSystem.Spacing.md) {
             Text("Data")
-                .font(.custom("Avenir Next", size: 14))
+                .font(.custom("Avenir Next", size: DesignSystem.FontSize.body))
                 .foregroundStyle(themedSecondaryText())
 
             Button {
@@ -2550,41 +2689,35 @@ struct SettingsView: View {
                 settingsRow(title: "Reset All Data", systemImage: "trash", isDestructive: true)
             }
         }
-        .padding(16)
+        .padding(DesignSystem.Spacing.lg)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 18)
-                .fill(themeColor(.card).opacity(0.9))
-        )
+        .cardBackground()
     }
 
     private var aboutCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: DesignSystem.Spacing.sm) {
             Text("About")
-                .font(.custom("Avenir Next", size: 14))
+                .font(.custom("Avenir Next", size: DesignSystem.FontSize.body))
                 .foregroundStyle(themedSecondaryText())
             Text("MyWorkout")
-                .font(.custom("Avenir Next", size: 18))
+                .font(.custom("Avenir Next", size: DesignSystem.FontSize.headline))
                 .foregroundStyle(themedPrimaryText())
             Text("Track what you lift, keep it simple.")
-                .font(.custom("Avenir Next", size: 13))
+                .font(.custom("Avenir Next", size: DesignSystem.FontSize.footnote))
                 .foregroundStyle(themedSecondaryText())
             Text("Data stays on device unless you export a backup.")
-                .font(.custom("Avenir Next", size: 12))
+                .font(.custom("Avenir Next", size: DesignSystem.FontSize.caption))
                 .foregroundStyle(themedSecondaryText())
             Text("License: MIT")
-                .font(.custom("Avenir Next", size: 12))
+                .font(.custom("Avenir Next", size: DesignSystem.FontSize.caption))
                 .foregroundStyle(themedSecondaryText())
             Text("Version \(appVersion)")
-                .font(.custom("Avenir Next", size: 12))
+                .font(.custom("Avenir Next", size: DesignSystem.FontSize.caption))
                 .foregroundStyle(themedSecondaryText())
         }
-        .padding(16)
+        .padding(DesignSystem.Spacing.lg)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 18)
-                .fill(themeColor(.card).opacity(0.9))
-        )
+        .cardBackground()
     }
 
     private var appVersion: String {
@@ -2596,14 +2729,14 @@ struct SettingsView: View {
     private func settingsRow(title: String, systemImage: String, isDestructive: Bool = false) -> some View {
         HStack {
             Image(systemName: systemImage)
-                .font(.custom("Avenir Next", size: 16))
+                .font(.custom("Avenir Next", size: DesignSystem.FontSize.subheadline))
                 .foregroundStyle(isDestructive ? themedPrimaryText().opacity(0.9) : themedPrimaryText())
             Text(title)
-                .font(.custom("Avenir Next", size: 16))
+                .font(.custom("Avenir Next", size: DesignSystem.FontSize.subheadline))
                 .foregroundStyle(isDestructive ? themedPrimaryText().opacity(0.9) : themedPrimaryText())
             Spacer()
         }
-        .padding(.vertical, 10)
+        .padding(.vertical, DesignSystem.Spacing.xs)
     }
 
     private func handleImport(from url: URL) {
@@ -2691,9 +2824,9 @@ struct ProgressTabView: View {
             .ignoresSafeArea()
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: DesignSystem.Spacing.xl) {
                     Text("Progress")
-                        .font(.custom("Avenir Next", size: 30))
+                        .font(.custom("Avenir Next", size: DesignSystem.FontSize.title2))
                         .fontWeight(.semibold)
                         .foregroundStyle(themedPrimaryText())
 
@@ -2702,8 +2835,7 @@ struct ProgressTabView: View {
                             Text(option.label).tag(option)
                         }
                     }
-                    .pickerStyle(.segmented)
-                    .tint(themedAccent())
+                    .themedSegmentedPicker()
 
                     strengthSection
                     volumeSection
@@ -2738,10 +2870,10 @@ struct ProgressTabView: View {
     }
 
     private var strengthSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: DesignSystem.Spacing.md) {
             HStack {
                 Text("Strength Trend")
-                    .font(.custom("Avenir Next", size: 18))
+                    .font(.custom("Avenir Next", size: DesignSystem.FontSize.headline))
                     .fontWeight(.semibold)
                     .foregroundStyle(themedPrimaryText())
                 Spacer()
@@ -2774,22 +2906,41 @@ struct ProgressTabView: View {
                         .foregroundStyle(themedAccent())
                     }
                 }
-                .frame(height: 220)
-                .chartYAxisLabel("Kg")
-                .chartXAxisLabel("Date")
-                .padding(12)
-                .background(
-                    RoundedRectangle(cornerRadius: 18)
-                        .fill(themeColor(.card).opacity(0.9))
-                )
+                .frame(height: DesignSystem.FrameSize.chartHeight)
+                .chartYAxisLabel(alignment: .leading) {
+                    Text("Kg")
+                        .foregroundStyle(themedSecondaryText())
+                }
+                .chartXAxisLabel(alignment: .center) {
+                    Text("Date")
+                        .foregroundStyle(themedSecondaryText())
+                }
+                .chartYAxis {
+                    AxisMarks(position: .leading) { _ in
+                        AxisValueLabel()
+                            .foregroundStyle(themedSecondaryText())
+                        AxisGridLine()
+                            .foregroundStyle(themedSecondaryText().opacity(0.3))
+                    }
+                }
+                .chartXAxis {
+                    AxisMarks(position: .bottom) { _ in
+                        AxisValueLabel()
+                            .foregroundStyle(themedSecondaryText())
+                        AxisGridLine()
+                            .foregroundStyle(themedSecondaryText().opacity(0.3))
+                    }
+                }
+                .padding(DesignSystem.Spacing.md)
+                .cardBackground()
             }
         }
     }
 
     private var volumeSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: DesignSystem.Spacing.md) {
             Text("Volume Trend")
-                .font(.custom("Avenir Next", size: 18))
+                .font(.custom("Avenir Next", size: DesignSystem.FontSize.headline))
                 .fontWeight(.semibold)
                 .foregroundStyle(themedPrimaryText())
 
@@ -2805,22 +2956,41 @@ struct ProgressTabView: View {
                         .foregroundStyle(themedAccentMuted())
                     }
                 }
-                .frame(height: 220)
-                .chartYAxisLabel("Total Volume")
-                .chartXAxisLabel("Date")
-                .padding(12)
-                .background(
-                    RoundedRectangle(cornerRadius: 18)
-                        .fill(themeColor(.card).opacity(0.9))
-                )
+                .frame(height: DesignSystem.FrameSize.chartHeight)
+                .chartYAxisLabel(alignment: .leading) {
+                    Text("Total Volume")
+                        .foregroundStyle(themedSecondaryText())
+                }
+                .chartXAxisLabel(alignment: .center) {
+                    Text("Date")
+                        .foregroundStyle(themedSecondaryText())
+                }
+                .chartYAxis {
+                    AxisMarks(position: .leading) { _ in
+                        AxisValueLabel()
+                            .foregroundStyle(themedSecondaryText())
+                        AxisGridLine()
+                            .foregroundStyle(themedSecondaryText().opacity(0.3))
+                    }
+                }
+                .chartXAxis {
+                    AxisMarks(position: .bottom) { _ in
+                        AxisValueLabel()
+                            .foregroundStyle(themedSecondaryText())
+                        AxisGridLine()
+                            .foregroundStyle(themedSecondaryText().opacity(0.3))
+                    }
+                }
+                .padding(DesignSystem.Spacing.md)
+                .cardBackground()
             }
         }
     }
 
     private var consistencySection: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: DesignSystem.Spacing.md) {
             Text("Workout Consistency")
-                .font(.custom("Avenir Next", size: 18))
+                .font(.custom("Avenir Next", size: DesignSystem.FontSize.headline))
                 .fontWeight(.semibold)
                 .foregroundStyle(themedPrimaryText())
 
@@ -2836,22 +3006,41 @@ struct ProgressTabView: View {
                         .foregroundStyle(themedAccent())
                     }
                 }
-                .frame(height: 200)
-                .chartYAxisLabel("Sessions")
-                .chartXAxisLabel("Week")
-                .padding(12)
-                .background(
-                    RoundedRectangle(cornerRadius: 18)
-                        .fill(themeColor(.card).opacity(0.9))
-                )
+                .frame(height: DesignSystem.FrameSize.consistencyChartHeight)
+                .chartYAxisLabel(alignment: .leading) {
+                    Text("Sessions")
+                        .foregroundStyle(themedSecondaryText())
+                }
+                .chartXAxisLabel(alignment: .center) {
+                    Text("Week")
+                        .foregroundStyle(themedSecondaryText())
+                }
+                .chartYAxis {
+                    AxisMarks(position: .leading) { _ in
+                        AxisValueLabel()
+                            .foregroundStyle(themedSecondaryText())
+                        AxisGridLine()
+                            .foregroundStyle(themedSecondaryText().opacity(0.3))
+                    }
+                }
+                .chartXAxis {
+                    AxisMarks(position: .bottom) { _ in
+                        AxisValueLabel()
+                            .foregroundStyle(themedSecondaryText())
+                        AxisGridLine()
+                            .foregroundStyle(themedSecondaryText().opacity(0.3))
+                    }
+                }
+                .padding(DesignSystem.Spacing.md)
+                .cardBackground()
             }
         }
     }
 
     private var cardioSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: DesignSystem.Spacing.md) {
             Text("Cardio Trend")
-                .font(.custom("Avenir Next", size: 18))
+                .font(.custom("Avenir Next", size: DesignSystem.FontSize.headline))
                 .fontWeight(.semibold)
                 .foregroundStyle(themedPrimaryText())
 
@@ -2873,14 +3062,33 @@ struct ProgressTabView: View {
                         .foregroundStyle(themedAccent())
                     }
                 }
-                .frame(height: 200)
-                .chartYAxisLabel("Minutes / Calories")
-                .chartXAxisLabel("Week")
-                .padding(12)
-                .background(
-                    RoundedRectangle(cornerRadius: 18)
-                        .fill(themeColor(.card).opacity(0.9))
-                )
+                .frame(height: DesignSystem.FrameSize.consistencyChartHeight)
+                .chartYAxisLabel(alignment: .leading) {
+                    Text("Minutes / Calories")
+                        .foregroundStyle(themedSecondaryText())
+                }
+                .chartXAxisLabel(alignment: .center) {
+                    Text("Week")
+                        .foregroundStyle(themedSecondaryText())
+                }
+                .chartYAxis {
+                    AxisMarks(position: .leading) { _ in
+                        AxisValueLabel()
+                            .foregroundStyle(themedSecondaryText())
+                        AxisGridLine()
+                            .foregroundStyle(themedSecondaryText().opacity(0.3))
+                    }
+                }
+                .chartXAxis {
+                    AxisMarks(position: .bottom) { _ in
+                        AxisValueLabel()
+                            .foregroundStyle(themedSecondaryText())
+                        AxisGridLine()
+                            .foregroundStyle(themedSecondaryText().opacity(0.3))
+                    }
+                }
+                .padding(DesignSystem.Spacing.md)
+                .cardBackground()
             }
         }
     }
@@ -2915,6 +3123,10 @@ struct ProgressTabView: View {
                         .background(
                             RoundedRectangle(cornerRadius: 14)
                                 .fill(themeColor(.card).opacity(0.9))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 14)
+                                        .stroke(themeColor(.sand).opacity(0.08), lineWidth: 1)
+                                )
                         )
                     }
                 }
@@ -2947,6 +3159,10 @@ struct ProgressTabView: View {
                         .background(
                             RoundedRectangle(cornerRadius: 14)
                                 .fill(themeColor(.card).opacity(0.9))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 14)
+                                        .stroke(themeColor(.sand).opacity(0.08), lineWidth: 1)
+                                )
                         )
                     }
                 }
@@ -2956,14 +3172,11 @@ struct ProgressTabView: View {
 
     private func emptyCard(text: String) -> some View {
         Text(text)
-            .font(.custom("Avenir Next", size: 14))
+            .font(.custom("Avenir Next", size: DesignSystem.FontSize.body))
             .foregroundStyle(themedSecondaryText())
-            .padding(16)
+            .padding(DesignSystem.Spacing.lg)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 16)
-                    .fill(themeColor(.card).opacity(0.85))
-            )
+            .cardBackground(cornerRadius: DesignSystem.CornerRadius.lg, opacity: 1.0)
     }
 
     private func rangeStartDate() -> Date? {
@@ -3086,34 +3299,31 @@ struct ExerciseHistoryCard: View {
     let weightUnit: WeightUnit
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: DesignSystem.Spacing.xs) {
             Text(name)
-                .font(.custom("Avenir Next", size: 18))
+                .font(.custom("Avenir Next", size: DesignSystem.FontSize.headline))
                 .fontWeight(.semibold)
                 .foregroundStyle(themedPrimaryText())
 
             if let record {
                 Text("Last used \(record.date.formatted(date: .abbreviated, time: .omitted))")
-                    .font(.custom("Avenir Next", size: 12))
+                    .font(.custom("Avenir Next", size: DesignSystem.FontSize.caption))
                     .foregroundStyle(themedSecondaryText())
 
-                HStack(spacing: 12) {
+                HStack(spacing: DesignSystem.Spacing.md) {
                     ForEach(tags(for: record.exercise), id: \.self) { tag in
                         TagView(text: tag)
                     }
                 }
             } else {
                 Text("No logged workout yet")
-                    .font(.custom("Avenir Next", size: 12))
+                    .font(.custom("Avenir Next", size: DesignSystem.FontSize.caption))
                     .foregroundStyle(themedSecondaryText())
             }
         }
-        .padding(18)
+        .padding(DesignSystem.Spacing.xl)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 20)
-                .fill(themeColor(.card).opacity(0.9))
-        )
+        .cardBackground(cornerRadius: DesignSystem.CornerRadius.xxl)
     }
 
     private func tags(for exercise: WorkoutExercise) -> [String] {
@@ -3708,6 +3918,10 @@ struct AddWorkoutView: View {
                     .background(
                         RoundedRectangle(cornerRadius: 14)
                             .fill(themeColor(.card))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 14)
+                                    .stroke(themeColor(.sand).opacity(0.08), lineWidth: 1)
+                            )
                     )
                 }
                 .buttonStyle(.plain)
@@ -3735,6 +3949,10 @@ struct AddWorkoutView: View {
                     .background(
                         RoundedRectangle(cornerRadius: 14)
                             .fill(themeColor(.card))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 14)
+                                    .stroke(themeColor(.sand).opacity(0.08), lineWidth: 1)
+                            )
                     )
 
                     VStack(alignment: .leading, spacing: 10) {
@@ -3780,6 +3998,10 @@ struct AddWorkoutView: View {
                     .background(
                         RoundedRectangle(cornerRadius: 14)
                             .fill(themeColor(.card))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 14)
+                                    .stroke(themeColor(.sand).opacity(0.08), lineWidth: 1)
+                            )
                     )
 
                     if isFutureDay(workoutDate) {
@@ -4195,10 +4417,14 @@ struct TemplateFlowView: View {
                         }
                         .padding(14)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(
-                            RoundedRectangle(cornerRadius: 16)
-                                .fill(themeColor(.card))
-                        )
+                    .background(
+                        RoundedRectangle(cornerRadius: 16)
+                            .fill(themeColor(.card))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 16)
+                                    .stroke(themeColor(.sand).opacity(0.08), lineWidth: 1)
+                            )
+                    )
                     }
                     .buttonStyle(.plain)
 
@@ -4222,10 +4448,14 @@ struct TemplateFlowView: View {
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(14)
-                        .background(
-                            RoundedRectangle(cornerRadius: 16)
-                                .fill(themeColor(.card))
-                        )
+                    .background(
+                        RoundedRectangle(cornerRadius: 16)
+                            .fill(themeColor(.card))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 16)
+                                    .stroke(themeColor(.sand).opacity(0.08), lineWidth: 1)
+                            )
+                    )
 
                         VStack(alignment: .leading, spacing: 10) {
                             HStack {
@@ -4267,10 +4497,14 @@ struct TemplateFlowView: View {
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(14)
-                        .background(
-                            RoundedRectangle(cornerRadius: 16)
-                                .fill(themeColor(.card))
-                        )
+                    .background(
+                        RoundedRectangle(cornerRadius: 16)
+                            .fill(themeColor(.card))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 16)
+                                    .stroke(themeColor(.sand).opacity(0.08), lineWidth: 1)
+                            )
+                    )
 
                         if isFutureDay(workoutDate) {
                             Text("Future date")
@@ -5088,6 +5322,10 @@ struct ExerciseEditorRow: View {
         .background(
             RoundedRectangle(cornerRadius: 14)
                 .fill(themeColor(.card))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14)
+                        .stroke(themeColor(.sand).opacity(0.08), lineWidth: 1)
+                )
         )
         .zIndex(isNameFocused ? 5 : 1)
         .sheet(isPresented: $showSpotSheet) {
@@ -5483,6 +5721,10 @@ struct ExerciseEditorRow: View {
                 .background(
                     RoundedRectangle(cornerRadius: 12)
                         .fill(themeColor(.card).opacity(0.6))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(themeColor(.sand).opacity(0.08), lineWidth: 1)
+                        )
                 )
 
                 Button {
@@ -5573,6 +5815,10 @@ struct ExerciseEditorRow: View {
                 .background(
                     RoundedRectangle(cornerRadius: 12)
                         .fill(themeColor(.card).opacity(0.6))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(themeColor(.sand).opacity(0.08), lineWidth: 1)
+                        )
                 )
 
                 Button {
@@ -5597,8 +5843,7 @@ struct ExerciseEditorRow: View {
                 Text(type.label).tag(type)
             }
         }
-        .pickerStyle(.segmented)
-        .tint(themedAccent())
+        .themedSegmentedPicker()
         .controlSize(.mini)
         .scaleEffect(0.9)
     }
@@ -6054,6 +6299,10 @@ struct StatCard: View {
         .background(
             RoundedRectangle(cornerRadius: 18)
                 .fill(themeColor(.card).opacity(0.8))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18)
+                        .stroke(themeColor(.sand).opacity(0.08), lineWidth: 1)
+                )
         )
     }
 }
@@ -6077,6 +6326,10 @@ struct StatPager: View {
             ZStack {
                 RoundedRectangle(cornerRadius: 18)
                     .fill(themeColor(.card).opacity(0.8))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18)
+                            .stroke(themeColor(.sand).opacity(0.08), lineWidth: 1)
+                    )
                 TabView(selection: $selection) {
                     ForEach(Array(pages.enumerated()), id: \.offset) { index, page in
                         StatPageView(page: page)
@@ -6202,17 +6455,17 @@ struct ExerciseNameField: View {
             }
             VStack(spacing: 6) {
                 TextField("Exercise Name", text: $text)
-                    .font(.custom("Avenir Next", size: 18))
+                    .font(.custom("Avenir Next", size: DesignSystem.FontSize.headline))
                     .textInputAutocapitalization(.words)
                     .foregroundStyle(themedPrimaryText())
-                    .padding(12)
+                    .padding(DesignSystem.Spacing.md)
                     .background(
-                        RoundedRectangle(cornerRadius: 12)
+                        RoundedRectangle(cornerRadius: DesignSystem.CornerRadius.sm)
                             .fill(themeColor(.card).opacity(0.8))
                             .overlay(
-                                RoundedRectangle(cornerRadius: 12)
+                                RoundedRectangle(cornerRadius: DesignSystem.CornerRadius.sm)
                                     .stroke(
-                                        isFocused ? themeColor(.sand).opacity(0.35) : themeColor(.sand).opacity(0.12),
+                                        isFocused ? themedAccent().opacity(0.35) : themedSecondaryText().opacity(0.12),
                                         lineWidth: 1
                                     )
                             )
@@ -6229,7 +6482,7 @@ struct ExerciseNameField: View {
                                         .stroke(themeColor(.sand).opacity(0.12), lineWidth: 1)
                                 )
                         )
-                        .shadow(color: Color.black.opacity(0.25), radius: 12, x: 0, y: 8)
+                        .shadow(color: themeColor(.night).opacity(0.25), radius: 12, x: 0, y: 8)
                 }
             }
         }
@@ -6344,6 +6597,10 @@ struct ExerciseLibraryView: View {
                     .background(
                         RoundedRectangle(cornerRadius: 14)
                             .fill(themeColor(.card))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 14)
+                                    .stroke(themeColor(.sand).opacity(0.08), lineWidth: 1)
+                            )
                     )
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
@@ -6537,15 +6794,15 @@ struct UnitPillAligned: View {
             Button("lb") { unit = .lb }
         } label: {
             Text(unit.label)
-                .font(.custom("Avenir Next", size: 13))
+                .font(.custom("Avenir Next", size: DesignSystem.FontSize.footnote))
                 .foregroundStyle(themedPrimaryText())
                 .frame(width: 44, height: 32)
                 .background(
                     Capsule()
-                        .fill(themeColor(.sand).opacity(0.12))
+                        .fill(themedAccentMuted().opacity(0.12))
                         .overlay(
                             Capsule()
-                                .stroke(themeColor(.sand).opacity(0.18), lineWidth: 1)
+                                .stroke(themedAccentMuted().opacity(0.18), lineWidth: 1)
                         )
                 )
         }
@@ -6856,6 +7113,10 @@ struct EmptyStateView: View {
         .background(
             RoundedRectangle(cornerRadius: 18)
                 .fill(themeColor(.card).opacity(0.8))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18)
+                        .stroke(themeColor(.sand).opacity(0.08), lineWidth: 1)
+                )
         )
     }
 }
@@ -6887,6 +7148,10 @@ struct TemplateCard: View {
             .background(
                 RoundedRectangle(cornerRadius: 18)
                     .fill(themeColor(.card).opacity(0.9))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18)
+                            .stroke(themeColor(.sand).opacity(0.08), lineWidth: 1)
+                    )
             )
         }
         .contextMenu {
@@ -6995,6 +7260,10 @@ struct QRCodeView: View {
                     .background(
                         RoundedRectangle(cornerRadius: 18)
                             .fill(themeColor(.card).opacity(0.9))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 18)
+                                    .stroke(themeColor(.sand).opacity(0.08), lineWidth: 1)
+                            )
                     )
             } else {
                 Text("Unable to generate QR code.")
@@ -7626,23 +7895,23 @@ struct SearchField: View {
     let placeholder: String
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: DesignSystem.Spacing.xs) {
             Image(systemName: "magnifyingglass")
-                .foregroundStyle(themeColor(.sand).opacity(0.6))
+                .foregroundStyle(themedSecondaryText())
             TextField(placeholder, text: $text)
-                .font(.custom("Avenir Next", size: 16))
-                .foregroundStyle(themeColor(.sand))
+                .font(.custom("Avenir Next", size: DesignSystem.FontSize.subheadline))
+                .foregroundStyle(themedPrimaryText())
         }
-        .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 14)
-                .fill(themeColor(.card))
-        )
+        .padding(DesignSystem.Spacing.md)
+        .cardBackground(cornerRadius: DesignSystem.CornerRadius.md)
     }
 }
 
 #Preview {
     ContentView()
+        .onAppear {
+            ThemeStore.shared.selectedTheme = .midnightSand
+        }
         .preferredColorScheme(.dark)
 }
  
