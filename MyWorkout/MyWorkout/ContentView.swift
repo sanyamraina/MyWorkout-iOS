@@ -7071,96 +7071,131 @@ struct ExerciseEditorRow: View {
     @ViewBuilder
     private var notesSection: some View {
         let trimmedNote = draft.exerciseNote.trimmingCharacters(in: .whitespacesAndNewlines)
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             if draft.isExerciseNoteExpanded {
-                HStack(alignment: .center, spacing: 10) {
-                    Label("Exercise Note", systemImage: "plus.circle")
-                        .font(.custom("Avenir Next", size: 12))
-                        .foregroundStyle(themedSecondaryText())
-                    Spacer()
-                    Button {
-                        presentExerciseNotesInfoIfNeeded()
-                        draft.isExerciseNoteExpanded = false
-                    } label: {
-                        Text("Done")
-                            .font(.custom("Avenir Next", size: 13))
-                            .foregroundStyle(themedPrimaryText())
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .background(themeColor(.sand).opacity(0.12))
-                            .clipShape(Capsule())
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(alignment: .center, spacing: 10) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "note.text")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(themedSecondaryText())
+                            Text("Exercise Note")
+                                .font(.custom("Avenir Next", size: 12))
+                                .fontWeight(.medium)
+                                .foregroundStyle(themedSecondaryText())
+                        }
+                        Spacer()
+                        Button {
+                            presentExerciseNotesInfoIfNeeded()
+                            draft.isExerciseNoteExpanded = false
+                        } label: {
+                            Text("Done")
+                                .font(.custom("Avenir Next", size: 13))
+                                .fontWeight(.medium)
+                                .foregroundStyle(themedAccentForeground())
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 7)
+                                .background(themedAccent())
+                                .clipShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
-                }
 
-                ZStack(alignment: .topLeading) {
-                    if trimmedNote.isEmpty {
-                        Text("Pain: left shoulder, Seat: 3, Grip: wide")
-                            .font(.custom("Avenir Next", size: 13))
-                            .foregroundStyle(themedSecondaryText())
-                            .padding(.top, 14)
-                            .padding(.leading, 16)
+                    ZStack(alignment: .topLeading) {
+                        if trimmedNote.isEmpty {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Example:")
+                                    .font(.custom("Avenir Next", size: 14))
+                                    .fontWeight(.medium)
+                                    .foregroundStyle(themedSecondaryText().opacity(0.8))
+                                Text("Pain: left shoulder, Seat: 3, Grip: wide")
+                                    .font(.custom("Avenir Next", size: 14))
+                                    .foregroundStyle(themedSecondaryText().opacity(0.6))
+                            }
+                            .padding(.top, 18)
+                            .padding(.leading, 18)
+                        }
+                        TextEditor(text: $draft.exerciseNote)
+                            .font(.custom("Avenir Next", size: 14))
+                            .foregroundStyle(themedPrimaryText())
+                            .scrollContentBackground(.hidden)
+                            .padding(.top, 10)
+                            .padding(.leading, 10)
                     }
-                    TextEditor(text: $draft.exerciseNote)
-                        .font(.custom("Avenir Next", size: 13))
-                        .foregroundStyle(themedPrimaryText())
-                        .scrollContentBackground(.hidden)
-                        .padding(.top, 8)
-                        .padding(.leading, 12)
-                        .padding(.trailing, 10)
-                        .padding(.bottom, 10)
+                    .frame(minHeight: 100)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(themeColor(.card).opacity(0.7))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .stroke(themedAccent().opacity(0.15), lineWidth: 1.5)
+                            )
+                    )
                 }
-                .frame(minHeight: 90)
-                .background(
-                    RoundedRectangle(cornerRadius: 14)
-                        .fill(themeColor(.card).opacity(0.85))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 14)
-                                .stroke(themeColor(.sand).opacity(0.12), lineWidth: 1)
-                        )
-                )
             } else if trimmedNote.isEmpty {
                 Button {
                     presentExerciseNotesInfoIfNeeded()
                     draft.isExerciseNoteExpanded = true
                 } label: {
-                    HStack(spacing: 10) {
+                    HStack {
                         Image(systemName: "plus.circle")
                         Text("Add Exercise Note")
-                            .font(.custom("Avenir Next", size: 15))
                     }
+                    .font(.custom("Avenir Next", size: 16))
                     .foregroundStyle(themedPrimaryText())
-                    .padding(.vertical, 12)
-                    .padding(.horizontal, 12)
-                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .buttonStyle(.plain)
-            } else {
-                VStack(alignment: .leading, spacing: 6) {
-                    Label("Exercise Note", systemImage: "plus.circle")
-                        .font(.custom("Avenir Next", size: 12))
-                        .foregroundStyle(themedSecondaryText())
-                    Text(trimmedNote)
-                        .font(.custom("Avenir Next", size: 14))
-                        .foregroundStyle(themedPrimaryText())
-                        .lineLimit(3)
-                }
-                .padding(12)
                 .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                VStack(alignment: .leading, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "note.text")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(themedSecondaryText())
+                            Text("Exercise Note")
+                                .font(.custom("Avenir Next", size: 12))
+                                .fontWeight(.medium)
+                                .foregroundStyle(themedSecondaryText())
+                        }
+                        Text(trimmedNote)
+                            .font(.custom("Avenir Next", size: 14))
+                            .foregroundStyle(themedPrimaryText())
+                            .lineLimit(4)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(themeColor(.card).opacity(0.6))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .stroke(themeColor(.sand).opacity(0.08), lineWidth: 1)
+                            )
+                    )
 
-                Button {
-                    presentExerciseNotesInfoIfNeeded()
-                    draft.isExerciseNoteExpanded = true
-                } label: {
-                    Label("Edit Note", systemImage: "plus.circle")
-                        .font(.custom("Avenir Next", size: 13))
+                    Button {
+                        presentExerciseNotesInfoIfNeeded()
+                        draft.isExerciseNoteExpanded = true
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "pencil")
+                                .font(.system(size: 12, weight: .medium))
+                            Text("Edit Note")
+                                .font(.custom("Avenir Next", size: 13))
+                                .fontWeight(.medium)
+                        }
                         .foregroundStyle(themedPrimaryText())
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(themeColor(.sand).opacity(0.12))
-                        .clipShape(Capsule())
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(
+                            Capsule()
+                                .fill(themeColor(.sand).opacity(0.15))
+                        )
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             }
         }
     }
@@ -7168,96 +7203,131 @@ struct ExerciseEditorRow: View {
     @ViewBuilder
     private var todaysNotesSection: some View {
         let trimmedEntry = draft.todaysNotes.trimmingCharacters(in: .whitespacesAndNewlines)
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             if draft.isTodaysNotesExpanded {
-                HStack(alignment: .center, spacing: 10) {
-                    Label("Today's Notes", systemImage: "plus.circle")
-                        .font(.custom("Avenir Next", size: 12))
-                        .foregroundStyle(themedSecondaryText())
-                    Spacer()
-                    Button {
-                        presentTodaysNotesInfoIfNeeded()
-                        draft.isTodaysNotesExpanded = false
-                    } label: {
-                        Text("Done")
-                            .font(.custom("Avenir Next", size: 13))
-                            .foregroundStyle(themedPrimaryText())
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .background(themeColor(.sand).opacity(0.12))
-                            .clipShape(Capsule())
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(alignment: .center, spacing: 10) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "square.and.pencil")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(themedSecondaryText())
+                            Text("Today's Notes")
+                                .font(.custom("Avenir Next", size: 12))
+                                .fontWeight(.medium)
+                                .foregroundStyle(themedSecondaryText())
+                        }
+                        Spacer()
+                        Button {
+                            presentTodaysNotesInfoIfNeeded()
+                            draft.isTodaysNotesExpanded = false
+                        } label: {
+                            Text("Done")
+                                .font(.custom("Avenir Next", size: 13))
+                                .fontWeight(.medium)
+                                .foregroundStyle(themedAccentForeground())
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 7)
+                                .background(themedAccent())
+                                .clipShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
-                }
 
-                ZStack(alignment: .topLeading) {
-                    if trimmedEntry.isEmpty {
-                        Text("Today: felt tight, reduced weight, eased tempo")
-                            .font(.custom("Avenir Next", size: 13))
-                            .foregroundStyle(themedSecondaryText())
-                            .padding(.top, 14)
-                            .padding(.leading, 16)
+                    ZStack(alignment: .topLeading) {
+                        if trimmedEntry.isEmpty {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Example:")
+                                    .font(.custom("Avenir Next", size: 14))
+                                    .fontWeight(.medium)
+                                    .foregroundStyle(themedSecondaryText().opacity(0.8))
+                                Text("Today: felt tight, reduced weight, eased tempo")
+                                    .font(.custom("Avenir Next", size: 14))
+                                    .foregroundStyle(themedSecondaryText().opacity(0.6))
+                            }
+                            .padding(.top, 18)
+                            .padding(.leading, 18)
+                        }
+                        TextEditor(text: $draft.todaysNotes)
+                            .font(.custom("Avenir Next", size: 14))
+                            .foregroundStyle(themedPrimaryText())
+                            .scrollContentBackground(.hidden)
+                            .padding(.top, 10)
+                            .padding(.leading, 10)
                     }
-                    TextEditor(text: $draft.todaysNotes)
-                        .font(.custom("Avenir Next", size: 13))
-                        .foregroundStyle(themedPrimaryText())
-                        .scrollContentBackground(.hidden)
-                        .padding(.top, 8)
-                        .padding(.leading, 12)
-                        .padding(.trailing, 10)
-                        .padding(.bottom, 10)
+                    .frame(minHeight: 100)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(themeColor(.card).opacity(0.7))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .stroke(themedAccent().opacity(0.15), lineWidth: 1.5)
+                            )
+                    )
                 }
-                .frame(minHeight: 90)
-                .background(
-                    RoundedRectangle(cornerRadius: 14)
-                        .fill(themeColor(.card).opacity(0.85))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 14)
-                                .stroke(themeColor(.sand).opacity(0.12), lineWidth: 1)
-                        )
-                )
             } else if trimmedEntry.isEmpty {
                 Button {
                     presentTodaysNotesInfoIfNeeded()
                     draft.isTodaysNotesExpanded = true
                 } label: {
-                    HStack(spacing: 10) {
+                    HStack {
                         Image(systemName: "plus.circle")
                         Text("Add Today's Notes")
-                            .font(.custom("Avenir Next", size: 15))
                     }
+                    .font(.custom("Avenir Next", size: 16))
                     .foregroundStyle(themedPrimaryText())
-                    .padding(.vertical, 12)
-                    .padding(.horizontal, 12)
-                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .buttonStyle(.plain)
-            } else {
-                VStack(alignment: .leading, spacing: 6) {
-                    Label("Today's Notes", systemImage: "plus.circle")
-                        .font(.custom("Avenir Next", size: 12))
-                        .foregroundStyle(themedSecondaryText())
-                    Text(trimmedEntry)
-                        .font(.custom("Avenir Next", size: 14))
-                        .foregroundStyle(themedPrimaryText())
-                        .lineLimit(3)
-                }
-                .padding(12)
                 .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                VStack(alignment: .leading, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "square.and.pencil")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(themedSecondaryText())
+                            Text("Today's Notes")
+                                .font(.custom("Avenir Next", size: 12))
+                                .fontWeight(.medium)
+                                .foregroundStyle(themedSecondaryText())
+                        }
+                        Text(trimmedEntry)
+                            .font(.custom("Avenir Next", size: 14))
+                            .foregroundStyle(themedPrimaryText())
+                            .lineLimit(4)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(themeColor(.card).opacity(0.6))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .stroke(themeColor(.sand).opacity(0.08), lineWidth: 1)
+                            )
+                    )
 
-                Button {
-                    presentTodaysNotesInfoIfNeeded()
-                    draft.isTodaysNotesExpanded = true
-                } label: {
-                    Label("Edit Today's Notes", systemImage: "plus.circle")
-                        .font(.custom("Avenir Next", size: 13))
+                    Button {
+                        presentTodaysNotesInfoIfNeeded()
+                        draft.isTodaysNotesExpanded = true
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "pencil")
+                                .font(.system(size: 12, weight: .medium))
+                            Text("Edit Today's Notes")
+                                .font(.custom("Avenir Next", size: 13))
+                                .fontWeight(.medium)
+                        }
                         .foregroundStyle(themedPrimaryText())
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(themeColor(.sand).opacity(0.12))
-                        .clipShape(Capsule())
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(
+                            Capsule()
+                                .fill(themeColor(.sand).opacity(0.15))
+                        )
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             }
         }
     }
@@ -7661,15 +7731,32 @@ struct ExerciseDetailCard: View {
             }
             if let entry = exercise.todaysNotes?.trimmingCharacters(in: .whitespacesAndNewlines),
                !entry.isEmpty {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Today's Notes")
-                        .font(.custom("Avenir Next", size: 12))
-                        .foregroundStyle(themedSecondaryText())
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "square.and.pencil")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(themedSecondaryText())
+                        Text("Today's Notes")
+                            .font(.custom("Avenir Next", size: 12))
+                            .fontWeight(.medium)
+                            .foregroundStyle(themedSecondaryText())
+                    }
                     Text(entry)
-                        .font(.custom("Avenir Next", size: 13))
+                        .font(.custom("Avenir Next", size: 14))
                         .foregroundStyle(themedPrimaryText())
+                        .lineLimit(nil)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                .padding(.top, 4)
+                .padding(12)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(themeColor(.card).opacity(0.6))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(themeColor(.sand).opacity(0.08), lineWidth: 1)
+                        )
+                )
+                .padding(.top, 6)
             }
         }
         .padding(16)
@@ -7777,12 +7864,13 @@ struct StatPageView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(page.title)
-                .font(.custom("Avenir Next", size: 12))
+                .font(.custom("Avenir Next", size: 14))
                 .foregroundStyle(themedSecondaryText())
             Text(page.value)
-                .font(.custom("Avenir Next", size: 22))
+                .font(.custom("Avenir Next", size: 28))
                 .fontWeight(.semibold)
                 .foregroundStyle(themedPrimaryText())
+                .padding(.leading, 5)
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -8048,13 +8136,21 @@ struct ExerciseLibraryView: View {
                 if store.isExerciseNotesEnabled, !exerciseNoteEntries.isEmpty {
                     Section {
                         ForEach(exerciseNoteEntries) { entry in
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text(entry.name)
-                                    .font(.custom("Avenir Next", size: 16))
-                                    .foregroundStyle(themedPrimaryText())
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "note.text")
+                                        .font(.system(size: 11, weight: .medium))
+                                        .foregroundStyle(themedSecondaryText())
+                                    Text(entry.name)
+                                        .font(.custom("Avenir Next", size: 16))
+                                        .fontWeight(.medium)
+                                        .foregroundStyle(themedPrimaryText())
+                                }
                                 Text(entry.exerciseNote)
-                                    .font(.custom("Avenir Next", size: 13))
+                                    .font(.custom("Avenir Next", size: 14))
                                     .foregroundStyle(themedSecondaryText())
+                                    .lineLimit(nil)
+                                    .fixedSize(horizontal: false, vertical: true)
                             }
                             .padding(14)
                             .frame(maxWidth: .infinity, alignment: .leading)
