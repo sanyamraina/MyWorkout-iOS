@@ -425,7 +425,7 @@ struct WorkoutExercise: Identifiable, Codable, Equatable {
     let durationSeconds: Int?
     let calories: Int?
     let loggedAt: Date?
-    let exerciseEntry: String?
+    let todaysNotes: String?
 
     init(
         id: UUID,
@@ -435,7 +435,7 @@ struct WorkoutExercise: Identifiable, Codable, Equatable {
         durationSeconds: Int? = nil,
         calories: Int? = nil,
         loggedAt: Date? = nil,
-        exerciseEntry: String? = nil
+        todaysNotes: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -444,7 +444,7 @@ struct WorkoutExercise: Identifiable, Codable, Equatable {
         self.durationSeconds = durationSeconds
         self.calories = calories
         self.loggedAt = loggedAt
-        self.exerciseEntry = exerciseEntry
+        self.todaysNotes = todaysNotes
     }
 
     init(from decoder: Decoder) throws {
@@ -471,7 +471,7 @@ struct WorkoutExercise: Identifiable, Codable, Equatable {
         }
         calories = try container.decodeIfPresent(Int.self, forKey: .calories)
         loggedAt = try container.decodeIfPresent(Date.self, forKey: .loggedAt)
-        exerciseEntry = try container.decodeIfPresent(String.self, forKey: .exerciseEntry)
+        todaysNotes = try container.decodeIfPresent(String.self, forKey: .todaysNotes)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -483,7 +483,7 @@ struct WorkoutExercise: Identifiable, Codable, Equatable {
         try container.encodeIfPresent(durationSeconds, forKey: .durationSeconds)
         try container.encodeIfPresent(calories, forKey: .calories)
         try container.encodeIfPresent(loggedAt, forKey: .loggedAt)
-        try container.encodeIfPresent(exerciseEntry, forKey: .exerciseEntry)
+        try container.encodeIfPresent(todaysNotes, forKey: .todaysNotes)
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -497,7 +497,7 @@ struct WorkoutExercise: Identifiable, Codable, Equatable {
         case durationSeconds
         case calories
         case loggedAt
-        case exerciseEntry
+        case todaysNotes
     }
 }
 
@@ -709,7 +709,7 @@ extension WorkoutSession {
                         durationSeconds: nil,
                         calories: nil,
                         loggedAt: mergedLoggedAt,
-                        exerciseEntry: mergedEntryNote(existing.exerciseEntry, exercise.exerciseEntry)
+                        todaysNotes: mergedEntryNote(existing.todaysNotes, exercise.todaysNotes)
                     )
                 case .cardio:
                     let currentSeconds = existing.durationSeconds ?? 0
@@ -727,7 +727,7 @@ extension WorkoutSession {
                         durationSeconds: totalSeconds > 0 ? totalSeconds : nil,
                         calories: totalCalories > 0 ? totalCalories : nil,
                         loggedAt: mergedLoggedAt,
-                        exerciseEntry: mergedEntryNote(existing.exerciseEntry, exercise.exerciseEntry)
+                        todaysNotes: mergedEntryNote(existing.todaysNotes, exercise.todaysNotes)
                     )
                 }
             } else {
@@ -892,8 +892,8 @@ final class WorkoutStore: ObservableObject {
     @Published var isExerciseNotesEnabled: Bool = true {
         didSet { saveExerciseNotesEnabled() }
     }
-    @Published var isExerciseEntryEnabled: Bool = true {
-        didSet { saveExerciseEntryEnabled() }
+    @Published var isTodaysNotesEnabled: Bool = true {
+        didSet { saveTodaysNotesEnabled() }
     }
     @Published var isSpottingEnabled: Bool = true {
         didSet { saveSpottingEnabled() }
@@ -904,7 +904,7 @@ final class WorkoutStore: ObservableObject {
         sessionMergeWindowOption = loadSessionMergeWindowOption()
         isDropSetsEnabled = loadDropSetsEnabled()
         isExerciseNotesEnabled = loadExerciseNotesEnabled()
-        isExerciseEntryEnabled = loadExerciseEntryEnabled()
+        isTodaysNotesEnabled = loadTodaysNotesEnabled()
         isSpottingEnabled = loadSpottingEnabled()
         templateUsage = loadTemplateUsage()
         customLibrary = loadCustomLibrary()
@@ -934,7 +934,7 @@ final class WorkoutStore: ObservableObject {
                 durationSeconds: exercise.durationSeconds,
                 calories: exercise.calories,
                 loggedAt: exercise.loggedAt ?? date,
-                exerciseEntry: exercise.exerciseEntry
+                todaysNotes: exercise.todaysNotes
             )
         }
         entries.append(contentsOf: newEntries)
@@ -968,7 +968,7 @@ final class WorkoutStore: ObservableObject {
                         durationSeconds: nil,
                         calories: nil,
                         loggedAt: mergedLoggedAt(current: current, incoming: exercise),
-                        exerciseEntry: mergedExerciseEntry(current: current, incoming: exercise)
+                        todaysNotes: mergedTodaysNotes(current: current, incoming: exercise)
                     )
                 case .cardio:
                     let currentSeconds = current.durationSeconds ?? 0
@@ -985,7 +985,7 @@ final class WorkoutStore: ObservableObject {
                         durationSeconds: totalSeconds > 0 ? totalSeconds : nil,
                         calories: totalCalories > 0 ? totalCalories : nil,
                         loggedAt: mergedLoggedAt(current: current, incoming: exercise),
-                        exerciseEntry: mergedExerciseEntry(current: current, incoming: exercise)
+                        todaysNotes: mergedTodaysNotes(current: current, incoming: exercise)
                     )
                 }
             } else {
@@ -1006,9 +1006,9 @@ final class WorkoutStore: ObservableObject {
         [current.loggedAt, incoming.loggedAt].compactMap { $0 }.min()
     }
 
-    private func mergedExerciseEntry(current: WorkoutExercise, incoming: WorkoutExercise) -> String? {
-        let currentEntry = current.exerciseEntry?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let incomingEntry = incoming.exerciseEntry?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    private func mergedTodaysNotes(current: WorkoutExercise, incoming: WorkoutExercise) -> String? {
+        let currentEntry = current.todaysNotes?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let incomingEntry = incoming.todaysNotes?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if currentEntry.isEmpty && incomingEntry.isEmpty {
             return nil
         }
@@ -1142,7 +1142,7 @@ final class WorkoutStore: ObservableObject {
             durationSeconds: exercise.durationSeconds,
             calories: exercise.calories,
             loggedAt: loggedAt,
-            exerciseEntry: exercise.exerciseEntry
+            todaysNotes: exercise.todaysNotes
         )
     }
 
@@ -1158,7 +1158,7 @@ final class WorkoutStore: ObservableObject {
                 durationSeconds: exercise.durationSeconds,
                 calories: exercise.calories,
                 loggedAt: exercise.loggedAt ?? date,
-                exerciseEntry: exercise.exerciseEntry
+                todaysNotes: exercise.todaysNotes
             )
         }
         entries.append(contentsOf: newEntries)
@@ -1410,7 +1410,7 @@ final class WorkoutStore: ObservableObject {
                         durationSeconds: exercise.durationSeconds,
                         calories: exercise.calories,
                         loggedAt: exercise.loggedAt ?? session.date,
-                        exerciseEntry: exercise.exerciseEntry
+                        todaysNotes: exercise.todaysNotes
                     )
                 }
             }
@@ -1491,7 +1491,7 @@ final class WorkoutStore: ObservableObject {
                         durationSeconds: exercise.durationSeconds,
                         calories: exercise.calories,
                         loggedAt: exercise.loggedAt ?? session.date,
-                        exerciseEntry: exercise.exerciseEntry
+                        todaysNotes: exercise.todaysNotes
                     )
                 }
             }
@@ -1734,13 +1734,13 @@ final class WorkoutStore: ObservableObject {
         UserDefaults.standard.set(isExerciseNotesEnabled, forKey: "notesEnabled")
     }
 
-    private func loadExerciseEntryEnabled() -> Bool {
-        let value = UserDefaults.standard.object(forKey: "exerciseEntryEnabled") as? Bool
+    private func loadTodaysNotesEnabled() -> Bool {
+        let value = UserDefaults.standard.object(forKey: "todaysNotesEnabled") as? Bool
         return value ?? true
     }
 
-    private func saveExerciseEntryEnabled() {
-        UserDefaults.standard.set(isExerciseEntryEnabled, forKey: "exerciseEntryEnabled")
+    private func saveTodaysNotesEnabled() {
+        UserDefaults.standard.set(isTodaysNotesEnabled, forKey: "todaysNotesEnabled")
     }
 
     private func loadSpottingEnabled() -> Bool {
@@ -2834,8 +2834,8 @@ struct SettingsView: View {
             }
             .themedToggle()
 
-            Toggle(isOn: $store.isExerciseEntryEnabled) {
-                Text("Exercise Entry")
+            Toggle(isOn: $store.isTodaysNotesEnabled) {
+                Text("Today's Notes")
                     .font(.custom("Avenir Next", size: DesignSystem.FontSize.subheadline))
                     .foregroundStyle(Color.primary)
             }
@@ -3562,8 +3562,8 @@ struct ExerciseDraft: Identifiable, Equatable, Codable {
     var caloriesPlaceholder: String
     var exerciseNote: String
     var isExerciseNoteExpanded: Bool
-    var exerciseEntry: String
-    var isExerciseEntryExpanded: Bool
+    var todaysNotes: String
+    var isTodaysNotesExpanded: Bool
     var entryId: UUID?
     var loggedAt: Date?
     var isNameLocked: Bool
@@ -3581,8 +3581,8 @@ struct ExerciseDraft: Identifiable, Equatable, Codable {
         caloriesPlaceholder: String = "",
         exerciseNote: String = "",
         isExerciseNoteExpanded: Bool = false,
-        exerciseEntry: String = "",
-        isExerciseEntryExpanded: Bool = false,
+        todaysNotes: String = "",
+        isTodaysNotesExpanded: Bool = false,
         entryId: UUID? = nil,
         loggedAt: Date? = nil,
         isNameLocked: Bool = false,
@@ -3599,13 +3599,14 @@ struct ExerciseDraft: Identifiable, Equatable, Codable {
         self.caloriesPlaceholder = caloriesPlaceholder
         self.exerciseNote = exerciseNote
         self.isExerciseNoteExpanded = isExerciseNoteExpanded
-        self.exerciseEntry = exerciseEntry
-        self.isExerciseEntryExpanded = isExerciseEntryExpanded
+        self.todaysNotes = todaysNotes
+        self.isTodaysNotesExpanded = isTodaysNotesExpanded
         self.entryId = entryId
         self.loggedAt = loggedAt
         self.isNameLocked = isNameLocked
         self.isTypeLocked = isTypeLocked
     }
+
 }
 
 struct WorkoutSetSegmentDraft: Identifiable, Equatable, Codable {
@@ -3663,7 +3664,7 @@ private extension ExerciseDraft {
         if !exerciseNote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return true
         }
-        if !exerciseEntry.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if !todaysNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return true
         }
         for set in sets {
@@ -3735,7 +3736,7 @@ struct LiveWorkoutView: View {
         }
         .sheet(item: $selectedDraft) { selection in
             if drafts.indices.contains(selection.index) {
-                TemplateExerciseEntryView(
+                TodaysNotesEntryView(
                     store: store,
                     workoutDate: workoutDate,
                     usesManualTimes: usesManualTimes,
@@ -4205,7 +4206,7 @@ struct LiveWorkoutView: View {
                     durationSeconds: exercise.durationSeconds,
                     calories: exercise.calories,
                     loggedAt: times[index],
-                    exerciseEntry: exercise.exerciseEntry
+                    todaysNotes: exercise.todaysNotes
                 )
             }
         } else {
@@ -4220,7 +4221,7 @@ struct LiveWorkoutView: View {
                     durationSeconds: exercise.durationSeconds,
                     calories: exercise.calories,
                     loggedAt: loggedAt,
-                    exerciseEntry: exercise.exerciseEntry
+                    todaysNotes: exercise.todaysNotes
                 )
             }
         }
@@ -4337,7 +4338,7 @@ struct LiveWorkoutView: View {
                 durationSeconds: nil,
                 calories: nil,
                 loggedAt: draft.loggedAt,
-                exerciseEntry: draft.exerciseEntry
+                todaysNotes: draft.todaysNotes
             )
         case .cardio:
             let durationTrimmed = draft.durationMinutes.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -4356,7 +4357,7 @@ struct LiveWorkoutView: View {
                 durationSeconds: durationValue,
                 calories: caloriesValue,
                 loggedAt: draft.loggedAt,
-                exerciseEntry: draft.exerciseEntry
+                todaysNotes: draft.todaysNotes
             )
         }
     }
@@ -4575,7 +4576,7 @@ struct AddWorkoutView: View {
                         durationSeconds: nil,
                         calories: nil,
                         loggedAt: draft.loggedAt,
-                        exerciseEntry: draft.exerciseEntry
+                        todaysNotes: draft.todaysNotes
                     )
                 )
             case .cardio:
@@ -4615,7 +4616,7 @@ struct AddWorkoutView: View {
                         durationSeconds: durationValue,
                         calories: caloriesValue,
                         loggedAt: draft.loggedAt,
-                        exerciseEntry: draft.exerciseEntry
+                        todaysNotes: draft.todaysNotes
                     )
                 )
             }
@@ -4998,7 +4999,7 @@ struct AddWorkoutView: View {
                     sets: setDrafts.isEmpty ? [WorkoutSetDraft()] : setDrafts,
                     weightUnit: store.defaultWeightUnit,
                     exerciseNote: store.exerciseNote(for: exercise.name),
-                    exerciseEntry: exercise.exerciseEntry ?? "",
+                    todaysNotes: exercise.todaysNotes ?? "",
                     entryId: exercise.id,
                     loggedAt: exercise.loggedAt
                 )
@@ -5011,7 +5012,7 @@ struct AddWorkoutView: View {
                     durationMinutes: formattedDurationValue(exercise.durationSeconds),
                     calories: formattedOptionalInt(exercise.calories),
                     exerciseNote: store.exerciseNote(for: exercise.name),
-                    exerciseEntry: exercise.exerciseEntry ?? "",
+                    todaysNotes: exercise.todaysNotes ?? "",
                     entryId: exercise.id,
                     loggedAt: exercise.loggedAt
                 )
@@ -5031,7 +5032,7 @@ struct AddWorkoutView: View {
                 isNameLocked: draft.isNameLocked,
                 isDropSetsEnabled: store.isDropSetsEnabled,
                 isExerciseNotesEnabled: store.isExerciseNotesEnabled,
-                isExerciseEntryEnabled: store.isExerciseEntryEnabled,
+                isTodaysNotesEnabled: store.isTodaysNotesEnabled,
                 isSpottingEnabled: store.isSpottingEnabled,
                 latestExerciseForName: { store.latestExerciseRecord(named: $0)?.exercise },
                 exerciseNoteForName: store.exerciseNote(for:),
@@ -5259,7 +5260,7 @@ struct AddWorkoutView: View {
                     durationSeconds: exercise.durationSeconds,
                     calories: exercise.calories,
                     loggedAt: combineDate(workoutDate, time: now),
-                    exerciseEntry: exercise.exerciseEntry
+                    todaysNotes: exercise.todaysNotes
                 )
             }
         }
@@ -5275,7 +5276,7 @@ struct AddWorkoutView: View {
                 durationSeconds: exercise.durationSeconds,
                 calories: exercise.calories,
                 loggedAt: times[index],
-                exerciseEntry: exercise.exerciseEntry
+                todaysNotes: exercise.todaysNotes
             )
         }
     }
@@ -5319,7 +5320,7 @@ struct AddWorkoutView: View {
                 durationSeconds: exercise.durationSeconds,
                 calories: exercise.calories,
                 loggedAt: assigned,
-                exerciseEntry: exercise.exerciseEntry
+                todaysNotes: exercise.todaysNotes
             )
         }
     }
@@ -5441,7 +5442,7 @@ struct TemplateFlowView: View {
         let withDialogs = AnyView(withChanges
             .sheet(item: $selectedExercise) { selection in
                 if drafts.indices.contains(selection.index) {
-                    TemplateExerciseEntryView(
+                    TodaysNotesEntryView(
                         store: store,
                         workoutDate: workoutDate,
                         usesManualTimes: usesManualTimes,
@@ -6057,7 +6058,7 @@ struct TemplateFlowView: View {
                     durationSeconds: nil,
                     calories: nil,
                     loggedAt: draft.loggedAt,
-                    exerciseEntry: draft.exerciseEntry
+                    todaysNotes: draft.todaysNotes
                 ),
                 false
             )
@@ -6095,7 +6096,7 @@ struct TemplateFlowView: View {
                     durationSeconds: durationValue,
                     calories: caloriesValue,
                     loggedAt: draft.loggedAt,
-                    exerciseEntry: draft.exerciseEntry
+                    todaysNotes: draft.todaysNotes
                 ),
                 false
             )
@@ -6141,7 +6142,7 @@ struct TemplateFlowView: View {
                     durationSeconds: exercise.durationSeconds,
                     calories: exercise.calories,
                     loggedAt: combineDate(workoutDate, time: now),
-                    exerciseEntry: exercise.exerciseEntry
+                    todaysNotes: exercise.todaysNotes
                 )
             }
         }
@@ -6157,7 +6158,7 @@ struct TemplateFlowView: View {
                 durationSeconds: exercise.durationSeconds,
                 calories: exercise.calories,
                 loggedAt: times[index],
-                exerciseEntry: exercise.exerciseEntry
+                todaysNotes: exercise.todaysNotes
             )
         }
     }
@@ -6323,7 +6324,7 @@ struct TemplateFlowView: View {
     }
 }
 
-struct TemplateExerciseEntryView: View {
+struct TodaysNotesEntryView: View {
     @ObservedObject var store: WorkoutStore
     let workoutDate: Date
     let usesManualTimes: Bool
@@ -6443,7 +6444,7 @@ struct TemplateExerciseEntryView: View {
                     durationSeconds: nil,
                     calories: nil,
                     loggedAt: draft.loggedAt,
-                    exerciseEntry: draft.exerciseEntry
+                    todaysNotes: draft.todaysNotes
                 ),
                 false
             )
@@ -6481,7 +6482,7 @@ struct TemplateExerciseEntryView: View {
                     durationSeconds: durationValue,
                     calories: caloriesValue,
                     loggedAt: draft.loggedAt,
-                    exerciseEntry: draft.exerciseEntry
+                    todaysNotes: draft.todaysNotes
                 ),
                 false
             )
@@ -6517,7 +6518,7 @@ struct TemplateExerciseEntryView: View {
                         isNameLocked: draft.isNameLocked,
                         isDropSetsEnabled: store.isDropSetsEnabled,
                         isExerciseNotesEnabled: store.isExerciseNotesEnabled,
-                        isExerciseEntryEnabled: store.isExerciseEntryEnabled,
+                        isTodaysNotesEnabled: store.isTodaysNotesEnabled,
                         isSpottingEnabled: store.isSpottingEnabled,
                         latestExerciseForName: { store.latestExerciseRecord(named: $0)?.exercise },
                         exerciseNoteForName: store.exerciseNote(for:),
@@ -6665,7 +6666,7 @@ struct ExerciseEditorRow: View {
     let isNameLocked: Bool
     let isDropSetsEnabled: Bool
     let isExerciseNotesEnabled: Bool
-    let isExerciseEntryEnabled: Bool
+    let isTodaysNotesEnabled: Bool
     let isSpottingEnabled: Bool
     let latestExerciseForName: ((String) -> WorkoutExercise?)?
     let exerciseNoteForName: ((String) -> String)?
@@ -6678,10 +6679,10 @@ struct ExerciseEditorRow: View {
     @State private var isNameFocused = false
     @State private var showSpotSheet = false
     @State private var showExerciseNotesInfoSheet = false
-    @State private var showExerciseEntryInfoSheet = false
+    @State private var showTodaysNotesInfoSheet = false
     private static let spotIntroKey = "spotIntroShown"
     private static let exerciseNotesInfoKey = "exerciseNotesInfoShown"
-    private static let exerciseEntryInfoKey = "exerciseEntryInfoShown"
+    private static let todaysNotesInfoKey = "todaysNotesInfoShown"
 
     init(
         draft: Binding<ExerciseDraft>,
@@ -6692,7 +6693,7 @@ struct ExerciseEditorRow: View {
         isNameLocked: Bool = false,
         isDropSetsEnabled: Bool,
         isExerciseNotesEnabled: Bool,
-        isExerciseEntryEnabled: Bool,
+        isTodaysNotesEnabled: Bool,
         isSpottingEnabled: Bool,
         latestExerciseForName: ((String) -> WorkoutExercise?)? = nil,
         exerciseNoteForName: ((String) -> String)?,
@@ -6710,7 +6711,7 @@ struct ExerciseEditorRow: View {
         self.isNameLocked = isNameLocked
         self.isDropSetsEnabled = isDropSetsEnabled
         self.isExerciseNotesEnabled = isExerciseNotesEnabled
-        self.isExerciseEntryEnabled = isExerciseEntryEnabled
+        self.isTodaysNotesEnabled = isTodaysNotesEnabled
         self.isSpottingEnabled = isSpottingEnabled
         self.latestExerciseForName = latestExerciseForName
         self.exerciseNoteForName = exerciseNoteForName
@@ -6839,7 +6840,7 @@ struct ExerciseEditorRow: View {
                 )
             )
         }
-        .sheet(isPresented: $showExerciseEntryInfoSheet) {
+        .sheet(isPresented: $showTodaysNotesInfoSheet) {
             VStack(spacing: 16) {
                 VStack(spacing: 12) {
                     ZStack {
@@ -6850,7 +6851,7 @@ struct ExerciseEditorRow: View {
                             .font(.system(size: 22, weight: .semibold))
                             .foregroundStyle(themedPrimaryText())
                     }
-                    Text("Exercise Entry")
+                    Text("Today's Notes")
                         .font(.custom("Avenir Next", size: 18))
                         .fontWeight(.semibold)
                         .foregroundStyle(themedPrimaryText())
@@ -6873,7 +6874,7 @@ struct ExerciseEditorRow: View {
                 )
 
                 Button("Got it") {
-                    showExerciseEntryInfoSheet = false
+                    showTodaysNotesInfoSheet = false
                 }
                 .font(.custom("Avenir Next", size: 16))
                 .foregroundStyle(themedAccentForeground())
@@ -6998,11 +6999,15 @@ struct ExerciseEditorRow: View {
                 } else {
                     cardioSection
                 }
-                if isExerciseNotesEnabled {
-                    notesSection
+                if isTodaysNotesEnabled {
+                    todaysNotesSection
                 }
-                if isExerciseEntryEnabled {
-                    exerciseEntrySection
+                if isExerciseNotesEnabled {
+                    if isTodaysNotesEnabled {
+                        Divider()
+                            .overlay(themeColor(.sand).opacity(0.12))
+                    }
+                    notesSection
                 }
             }
         }
@@ -7066,91 +7071,94 @@ struct ExerciseEditorRow: View {
     @ViewBuilder
     private var notesSection: some View {
         let trimmedNote = draft.exerciseNote.trimmingCharacters(in: .whitespacesAndNewlines)
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             if draft.isExerciseNoteExpanded {
-                Text("Exercise Note")
-                    .font(.custom("Avenir Next", size: 12))
-                    .foregroundStyle(themedSecondaryText())
+                HStack(alignment: .center, spacing: 10) {
+                    Label("Exercise Note", systemImage: "plus.circle")
+                        .font(.custom("Avenir Next", size: 12))
+                        .foregroundStyle(themedSecondaryText())
+                    Spacer()
+                    Button {
+                        presentExerciseNotesInfoIfNeeded()
+                        draft.isExerciseNoteExpanded = false
+                    } label: {
+                        Text("Done")
+                            .font(.custom("Avenir Next", size: 13))
+                            .foregroundStyle(themedPrimaryText())
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(themeColor(.sand).opacity(0.12))
+                            .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+
                 ZStack(alignment: .topLeading) {
                     if trimmedNote.isEmpty {
                         Text("Pain: left shoulder, Seat: 3, Grip: wide")
                             .font(.custom("Avenir Next", size: 13))
                             .foregroundStyle(themedSecondaryText())
-                            .padding(.top, 19)
-                            .padding(.leading, 19)
+                            .padding(.top, 14)
+                            .padding(.leading, 16)
                     }
                     TextEditor(text: $draft.exerciseNote)
                         .font(.custom("Avenir Next", size: 13))
                         .foregroundStyle(themedPrimaryText())
                         .scrollContentBackground(.hidden)
-                        .padding(.top, 10)
+                        .padding(.top, 8)
                         .padding(.leading, 12)
-                        .padding(.trailing, 8)
-                        .padding(.bottom, 8)
+                        .padding(.trailing, 10)
+                        .padding(.bottom, 10)
                 }
-                .frame(minHeight: 80)
+                .frame(minHeight: 90)
                 .background(
-                    RoundedRectangle(cornerRadius: 12)
+                    RoundedRectangle(cornerRadius: 14)
                         .fill(themeColor(.card).opacity(0.85))
                         .overlay(
-                            RoundedRectangle(cornerRadius: 12)
+                            RoundedRectangle(cornerRadius: 14)
                                 .stroke(themeColor(.sand).opacity(0.12), lineWidth: 1)
                         )
                 )
-
-                Button {
-                    presentExerciseNotesInfoIfNeeded()
-                    draft.isExerciseNoteExpanded = false
-                } label: {
-                    Text(trimmedNote.isEmpty ? "Hide Exercise Note" : "Done")
-                        .font(.custom("Avenir Next", size: 14))
-                        .foregroundStyle(themedPrimaryText())
-                }
-                .buttonStyle(.plain)
             } else if trimmedNote.isEmpty {
                 Button {
                     presentExerciseNotesInfoIfNeeded()
                     draft.isExerciseNoteExpanded = true
                 } label: {
-                    HStack {
+                    HStack(spacing: 10) {
                         Image(systemName: "plus.circle")
                         Text("Add Exercise Note")
+                            .font(.custom("Avenir Next", size: 15))
                     }
-                    .font(.custom("Avenir Next", size: 15))
                     .foregroundStyle(themedPrimaryText())
+                    .padding(.vertical, 12)
+                    .padding(.horizontal, 12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .buttonStyle(.plain)
             } else {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Exercise Note")
+                    Label("Exercise Note", systemImage: "plus.circle")
                         .font(.custom("Avenir Next", size: 12))
                         .foregroundStyle(themedSecondaryText())
                     Text(trimmedNote)
-                        .font(.custom("Avenir Next", size: 13))
+                        .font(.custom("Avenir Next", size: 14))
                         .foregroundStyle(themedPrimaryText())
-                        .lineLimit(2)
+                        .lineLimit(3)
                 }
-                .padding(10)
+                .padding(12)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(themeColor(.card).opacity(0.6))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 12)
-                                .stroke(themeColor(.sand).opacity(0.08), lineWidth: 1)
-                        )
-                )
 
                 Button {
                     presentExerciseNotesInfoIfNeeded()
                     draft.isExerciseNoteExpanded = true
                 } label: {
-                    HStack {
-                        Image(systemName: "pencil")
-                        Text("Edit Exercise Note")
-                    }
-                    .font(.custom("Avenir Next", size: 14))
-                    .foregroundStyle(themedPrimaryText())
+                    Label("Edit Note", systemImage: "plus.circle")
+                        .font(.custom("Avenir Next", size: 13))
+                        .foregroundStyle(themedPrimaryText())
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(themeColor(.sand).opacity(0.12))
+                        .clipShape(Capsule())
                 }
                 .buttonStyle(.plain)
             }
@@ -7158,93 +7166,96 @@ struct ExerciseEditorRow: View {
     }
 
     @ViewBuilder
-    private var exerciseEntrySection: some View {
-        let trimmedEntry = draft.exerciseEntry.trimmingCharacters(in: .whitespacesAndNewlines)
-        VStack(alignment: .leading, spacing: 8) {
-            if draft.isExerciseEntryExpanded {
-                Text("Exercise Entry")
-                    .font(.custom("Avenir Next", size: 12))
-                    .foregroundStyle(themedSecondaryText())
+    private var todaysNotesSection: some View {
+        let trimmedEntry = draft.todaysNotes.trimmingCharacters(in: .whitespacesAndNewlines)
+        VStack(alignment: .leading, spacing: 10) {
+            if draft.isTodaysNotesExpanded {
+                HStack(alignment: .center, spacing: 10) {
+                    Label("Today's Notes", systemImage: "plus.circle")
+                        .font(.custom("Avenir Next", size: 12))
+                        .foregroundStyle(themedSecondaryText())
+                    Spacer()
+                    Button {
+                        presentTodaysNotesInfoIfNeeded()
+                        draft.isTodaysNotesExpanded = false
+                    } label: {
+                        Text("Done")
+                            .font(.custom("Avenir Next", size: 13))
+                            .foregroundStyle(themedPrimaryText())
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(themeColor(.sand).opacity(0.12))
+                            .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+
                 ZStack(alignment: .topLeading) {
                     if trimmedEntry.isEmpty {
                         Text("Today: felt tight, reduced weight, eased tempo")
                             .font(.custom("Avenir Next", size: 13))
                             .foregroundStyle(themedSecondaryText())
-                            .padding(.top, 19)
-                            .padding(.leading, 19)
+                            .padding(.top, 14)
+                            .padding(.leading, 16)
                     }
-                    TextEditor(text: $draft.exerciseEntry)
+                    TextEditor(text: $draft.todaysNotes)
                         .font(.custom("Avenir Next", size: 13))
                         .foregroundStyle(themedPrimaryText())
                         .scrollContentBackground(.hidden)
-                        .padding(.top, 10)
+                        .padding(.top, 8)
                         .padding(.leading, 12)
-                        .padding(.trailing, 8)
-                        .padding(.bottom, 8)
+                        .padding(.trailing, 10)
+                        .padding(.bottom, 10)
                 }
-                .frame(minHeight: 80)
+                .frame(minHeight: 90)
                 .background(
-                    RoundedRectangle(cornerRadius: 12)
+                    RoundedRectangle(cornerRadius: 14)
                         .fill(themeColor(.card).opacity(0.85))
                         .overlay(
-                            RoundedRectangle(cornerRadius: 12)
+                            RoundedRectangle(cornerRadius: 14)
                                 .stroke(themeColor(.sand).opacity(0.12), lineWidth: 1)
                         )
                 )
-
-                Button {
-                    presentExerciseEntryInfoIfNeeded()
-                    draft.isExerciseEntryExpanded = false
-                } label: {
-                    Text(trimmedEntry.isEmpty ? "Hide Exercise Entry" : "Done")
-                        .font(.custom("Avenir Next", size: 14))
-                        .foregroundStyle(themedPrimaryText())
-                }
-                .buttonStyle(.plain)
             } else if trimmedEntry.isEmpty {
                 Button {
-                    presentExerciseEntryInfoIfNeeded()
-                    draft.isExerciseEntryExpanded = true
+                    presentTodaysNotesInfoIfNeeded()
+                    draft.isTodaysNotesExpanded = true
                 } label: {
-                    HStack {
+                    HStack(spacing: 10) {
                         Image(systemName: "plus.circle")
-                        Text("Add Exercise Entry")
+                        Text("Add Today's Notes")
+                            .font(.custom("Avenir Next", size: 15))
                     }
-                    .font(.custom("Avenir Next", size: 15))
                     .foregroundStyle(themedPrimaryText())
+                    .padding(.vertical, 12)
+                    .padding(.horizontal, 12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .buttonStyle(.plain)
             } else {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Exercise Entry")
+                    Label("Today's Notes", systemImage: "plus.circle")
                         .font(.custom("Avenir Next", size: 12))
                         .foregroundStyle(themedSecondaryText())
                     Text(trimmedEntry)
-                        .font(.custom("Avenir Next", size: 13))
+                        .font(.custom("Avenir Next", size: 14))
                         .foregroundStyle(themedPrimaryText())
-                        .lineLimit(2)
+                        .lineLimit(3)
                 }
-                .padding(10)
+                .padding(12)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(themeColor(.card).opacity(0.6))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 12)
-                                .stroke(themeColor(.sand).opacity(0.08), lineWidth: 1)
-                        )
-                )
 
                 Button {
-                    presentExerciseEntryInfoIfNeeded()
-                    draft.isExerciseEntryExpanded = true
+                    presentTodaysNotesInfoIfNeeded()
+                    draft.isTodaysNotesExpanded = true
                 } label: {
-                    HStack {
-                        Image(systemName: "pencil")
-                        Text("Edit Exercise Entry")
-                    }
-                    .font(.custom("Avenir Next", size: 14))
-                    .foregroundStyle(themedPrimaryText())
+                    Label("Edit Today's Notes", systemImage: "plus.circle")
+                        .font(.custom("Avenir Next", size: 13))
+                        .foregroundStyle(themedPrimaryText())
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(themeColor(.sand).opacity(0.12))
+                        .clipShape(Capsule())
                 }
                 .buttonStyle(.plain)
             }
@@ -7378,10 +7389,10 @@ struct ExerciseEditorRow: View {
         showExerciseNotesInfoSheet = true
     }
 
-    private func presentExerciseEntryInfoIfNeeded() {
-        guard !UserDefaults.standard.bool(forKey: Self.exerciseEntryInfoKey) else { return }
-        UserDefaults.standard.set(true, forKey: Self.exerciseEntryInfoKey)
-        showExerciseEntryInfoSheet = true
+    private func presentTodaysNotesInfoIfNeeded() {
+        guard !UserDefaults.standard.bool(forKey: Self.todaysNotesInfoKey) else { return }
+        UserDefaults.standard.set(true, forKey: Self.todaysNotesInfoKey)
+        showTodaysNotesInfoSheet = true
     }
 
     private func roundToHalf(_ value: Double) -> Double {
@@ -7648,10 +7659,10 @@ struct ExerciseDetailCard: View {
                     }
                 }
             }
-            if let entry = exercise.exerciseEntry?.trimmingCharacters(in: .whitespacesAndNewlines),
+            if let entry = exercise.todaysNotes?.trimmingCharacters(in: .whitespacesAndNewlines),
                !entry.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Exercise Entry")
+                    Text("Today's Notes")
                         .font(.custom("Avenir Next", size: 12))
                         .foregroundStyle(themedSecondaryText())
                     Text(entry)
@@ -9042,7 +9053,7 @@ struct AddTemplateView: View {
                     isNameLocked: draft.isNameLocked,
                     isDropSetsEnabled: store.isDropSetsEnabled,
                     isExerciseNotesEnabled: store.isExerciseNotesEnabled,
-                    isExerciseEntryEnabled: store.isExerciseEntryEnabled,
+                    isTodaysNotesEnabled: store.isTodaysNotesEnabled,
                     isSpottingEnabled: store.isSpottingEnabled,
                     latestExerciseForName: { store.latestExerciseRecord(named: $0)?.exercise },
                     exerciseNoteForName: nil,
@@ -9194,7 +9205,7 @@ struct EditTemplateView: View {
                             isNameLocked: draft.isNameLocked,
                             isDropSetsEnabled: store.isDropSetsEnabled,
                             isExerciseNotesEnabled: store.isExerciseNotesEnabled,
-                            isExerciseEntryEnabled: store.isExerciseEntryEnabled,
+                            isTodaysNotesEnabled: store.isTodaysNotesEnabled,
                             isSpottingEnabled: store.isSpottingEnabled,
                             latestExerciseForName: { store.latestExerciseRecord(named: $0)?.exercise },
                             exerciseNoteForName: nil,
