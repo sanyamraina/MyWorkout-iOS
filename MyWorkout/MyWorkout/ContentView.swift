@@ -357,6 +357,7 @@ enum MuscleGroup: String, CaseIterable, Codable {
     case legs = "Legs"
     case core = "Core"
     case cardio = "Cardio"
+    case custom = "Custom"
 }
 
 enum TemplateShareError: Error {
@@ -788,7 +789,8 @@ final class WorkoutStore: ObservableObject {
     @Published private(set) var entries: [WorkoutExercise] = []
     @Published private(set) var sessions: [WorkoutSession] = []
     @Published private(set) var templates: [WorkoutTemplate] = []
-    @Published private(set) var exerciseLibrary: [LibraryExercise] = WorkoutStore.defaultLibrary
+    @Published private(set) var exerciseLibrary: [LibraryExercise] = []
+    private var customLibrary: [LibraryExercise] = []
     private var hasLoaded = false
     @Published private var exerciseTypeMap: [String: ExerciseType] = [:]
     @Published private var exerciseNotes: [String: String] = [:]
@@ -820,6 +822,8 @@ final class WorkoutStore: ObservableObject {
         isExerciseEntryEnabled = loadExerciseEntryEnabled()
         isSpottingEnabled = loadSpottingEnabled()
         templateUsage = loadTemplateUsage()
+        customLibrary = loadCustomLibrary()
+        exerciseLibrary = mergedLibrary(defaults: Self.defaultLibrary, custom: customLibrary)
         load()
     }
 
@@ -849,6 +853,7 @@ final class WorkoutStore: ObservableObject {
             )
         }
         entries.append(contentsOf: newEntries)
+        ensureLibraryEntries(for: newEntries)
         updateExerciseTypes(from: newEntries)
         saveEntries()
         refreshSessions()
@@ -1072,6 +1077,7 @@ final class WorkoutStore: ObservableObject {
             )
         }
         entries.append(contentsOf: newEntries)
+        ensureLibraryEntries(for: newEntries)
         updateExerciseTypes(from: newEntries)
         saveEntries()
         refreshSessions()
@@ -1114,6 +1120,7 @@ final class WorkoutStore: ObservableObject {
             exercises: normalizedExercises
         )
         templates.insert(template, at: 0)
+        ensureLibraryEntries(for: normalizedExercises)
         updateExerciseTypes(from: normalizedExercises)
         saveTemplates()
         saveTemplateUsage()
@@ -1151,6 +1158,7 @@ final class WorkoutStore: ObservableObject {
             )
         }
         templates[index] = WorkoutTemplate(id: id, title: normalizedTitle, exercises: normalizedExercises)
+        ensureLibraryEntries(for: normalizedExercises)
         updateExerciseTypes(from: normalizedExercises)
         saveTemplates()
     }
@@ -1326,6 +1334,7 @@ final class WorkoutStore: ObservableObject {
         templates = backup.templates
         exerciseNotes = backup.notes ?? [:]
         exerciseTypeMap = [:]
+        ensureLibraryEntries(for: self.entries)
         updateExerciseTypes(from: self.entries)
         updateExerciseTypes(from: templates.flatMap { $0.exercises })
         saveEntries()
@@ -1349,12 +1358,22 @@ final class WorkoutStore: ObservableObject {
         templates = []
         exerciseTypeMap = [:]
         exerciseNotes = [:]
+        customLibrary = []
+        exerciseLibrary = Self.defaultLibrary
         saveEntries()
         saveTemplates()
         saveExerciseTypes()
         saveExerciseNotes()
+        saveCustomLibrary()
 
-        let urls = [sessionsFileURL(), entriesFileURL(), templatesFileURL(), exerciseTypesFileURL(), exerciseNotesFileURL()]
+        let urls = [
+            sessionsFileURL(),
+            entriesFileURL(),
+            templatesFileURL(),
+            exerciseTypesFileURL(),
+            exerciseNotesFileURL(),
+            exerciseLibraryFileURL()
+        ]
         for url in urls {
             try? FileManager.default.removeItem(at: url)
         }
@@ -1485,6 +1504,48 @@ final class WorkoutStore: ObservableObject {
         if changed {
             saveExerciseTypes()
         }
+    }
+
+    private func ensureLibraryEntries(for exercises: [WorkoutExercise]) {
+        var didChange = false
+        for exercise in exercises {
+            let trimmed = exercise.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            if addToLibraryIfNeeded(name: trimmed, type: exercise.type) {
+                didChange = true
+            }
+        }
+        if didChange {
+            saveCustomLibrary()
+            updateExerciseTypes(from: exerciseLibrary)
+        }
+    }
+
+    private func ensureLibraryEntries(for exercises: [TemplateExercise]) {
+        var didChange = false
+        for exercise in exercises {
+            let trimmed = exercise.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            if addToLibraryIfNeeded(name: trimmed, type: exercise.type) {
+                didChange = true
+            }
+        }
+        if didChange {
+            saveCustomLibrary()
+            updateExerciseTypes(from: exerciseLibrary)
+        }
+    }
+
+    private func addToLibraryIfNeeded(name: String, type: ExerciseType) -> Bool {
+        let key = normalizedExerciseKey(name)
+        guard !key.isEmpty else { return false }
+        let exists = exerciseLibrary.contains { normalizedExerciseKey($0.name) == key }
+        guard !exists else { return false }
+        let group: MuscleGroup = type == .cardio ? .cardio : .custom
+        let newExercise = LibraryExercise(id: UUID(), name: normalizedTitleCase(name), group: group, type: type)
+        customLibrary.append(newExercise)
+        exerciseLibrary = mergedLibrary(defaults: Self.defaultLibrary, custom: customLibrary)
+        return true
     }
 
     private func normalizedExerciseKey(_ name: String) -> String {
@@ -1697,6 +1758,24 @@ final class WorkoutStore: ObservableObject {
         LibraryExercise(id: UUID(), name: "Swimming", group: .cardio, type: .cardio)
     ]
 
+    private func mergedLibrary(defaults: [LibraryExercise], custom: [LibraryExercise]) -> [LibraryExercise] {
+        var seen = Set<String>()
+        var merged: [LibraryExercise] = []
+        for exercise in defaults {
+            let key = normalizedExerciseKey(exercise.name)
+            guard !key.isEmpty, !seen.contains(key) else { continue }
+            seen.insert(key)
+            merged.append(exercise)
+        }
+        for exercise in custom {
+            let key = normalizedExerciseKey(exercise.name)
+            guard !key.isEmpty, !seen.contains(key) else { continue }
+            seen.insert(key)
+            merged.append(exercise)
+        }
+        return merged
+    }
+
     private func loadSessions() -> [WorkoutSession] {
         do {
             let data = try Data(contentsOf: sessionsFileURL())
@@ -1790,6 +1869,31 @@ final class WorkoutStore: ObservableObject {
         }
     }
 
+    private func loadCustomLibrary() -> [LibraryExercise] {
+        do {
+            let data = try Data(contentsOf: exerciseLibraryFileURL())
+            return try JSONDecoder().decode([LibraryExercise].self, from: data)
+        } catch {
+            return []
+        }
+    }
+
+    private func saveCustomLibrary() {
+        guard hasLoaded else { return }
+        do {
+            let data = try JSONEncoder().encode(customLibrary)
+            let url = exerciseLibraryFileURL()
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true,
+                attributes: nil
+            )
+            try data.write(to: url, options: [.atomic])
+        } catch {
+            // Ignore write failures; user can continue without persistence.
+        }
+    }
+
     private func saveTemplates() {
         guard hasLoaded else { return }
         do {
@@ -1829,6 +1933,11 @@ final class WorkoutStore: ObservableObject {
     private func exerciseNotesFileURL() -> URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         return base.appendingPathComponent("MyWorkout/exercise-notes.json")
+    }
+
+    private func exerciseLibraryFileURL() -> URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        return base.appendingPathComponent("MyWorkout/exercise-library.json")
     }
 
     private struct LegacyWorkoutEntry: Codable {
@@ -3466,8 +3575,10 @@ struct LiveWorkoutView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var workoutDate = Date()
-    @State private var usesManualDate = false
-    @State private var showsDateEditor = false
+    @State private var usesManualTimes = false
+    @State private var showsTimeEditor = false
+    @State private var manualStartTime = Date()
+    @State private var manualEndTime = Date()
     @State private var drafts: [ExerciseDraft] = []
     @State private var newDraftIds: Set<UUID> = []
     @State private var pendingTemplateDrafts: [ExerciseDraft] = []
@@ -3508,7 +3619,7 @@ struct LiveWorkoutView: View {
                 TemplateExerciseEntryView(
                     store: store,
                     workoutDate: workoutDate,
-                    usesManualTimes: false,
+                    usesManualTimes: usesManualTimes,
                     draft: $drafts[selection.index],
                     onSave: { updated in
                         handleDraftSave(updated, at: selection.index)
@@ -3538,11 +3649,25 @@ struct LiveWorkoutView: View {
             guard !hasLoadedDrafts else { return }
             hasLoadedDrafts = true
             workoutDate = Date()
+            manualStartTime = Date()
+            manualEndTime = Date()
             if let template {
                 pendingTemplateDrafts = store.resolvedDrafts(for: template)
                 if drafts.isEmpty, !pendingTemplateDrafts.isEmpty {
                     startNextExercise()
                 }
+            }
+        }
+        .onChange(of: manualStartTime) { _, newValue in
+            let minimumEnd = Calendar.current.date(byAdding: .minute, value: 5, to: newValue) ?? newValue
+            if manualEndTime < minimumEnd {
+                manualEndTime = minimumEnd
+            }
+        }
+        .onChange(of: manualEndTime) { _, newValue in
+            let minimumEnd = Calendar.current.date(byAdding: .minute, value: 5, to: manualStartTime) ?? manualStartTime
+            if newValue < minimumEnd {
+                manualEndTime = minimumEnd
             }
         }
     }
@@ -3555,14 +3680,20 @@ struct LiveWorkoutView: View {
 
             VStack(alignment: .leading, spacing: 12) {
                 Button {
-                    showsDateEditor.toggle()
+                    if showsTimeEditor {
+                        usesManualTimes = !shouldUseLiveSchedule()
+                        showsTimeEditor = false
+                    } else {
+                        usesManualTimes = true
+                        showsTimeEditor = true
+                    }
                 } label: {
                     HStack {
                         Text(scheduleSummary)
                             .font(.custom("Avenir Next", size: 16))
                             .foregroundStyle(themedPrimaryText())
                         Spacer()
-                        Image(systemName: showsDateEditor ? "chevron.up" : "chevron.down")
+                        Image(systemName: showsTimeEditor ? "chevron.up" : "chevron.down")
                             .font(.custom("Avenir Next", size: 12))
                             .foregroundStyle(themedSecondaryText())
                     }
@@ -3579,33 +3710,22 @@ struct LiveWorkoutView: View {
                 }
                 .buttonStyle(.plain)
 
-                if showsDateEditor {
+                if showsTimeEditor {
                     VStack(alignment: .leading, spacing: 10) {
-                        Toggle(isOn: $usesManualDate) {
-                            Text("Use specific date")
-                                .font(.custom("Avenir Next", size: 13))
+                        Text("Date")
+                            .font(.custom("Avenir Next", size: 11))
+                            .foregroundStyle(themedSecondaryText())
+                        HStack {
+                            Text(relativeLabel(for: workoutDate))
+                                .font(.custom("Avenir Next", size: 16))
                                 .foregroundStyle(themedPrimaryText())
-                        }
-                        .tint(themedAccent())
-                        .onChange(of: usesManualDate) { _, newValue in
-                            if !newValue {
-                                workoutDate = Date()
-                            }
-                        }
-
-                        if usesManualDate {
-                            HStack {
-                                Text(relativeLabel(for: workoutDate))
-                                    .font(.custom("Avenir Next", size: 16))
-                                    .foregroundStyle(themedPrimaryText())
-                                Spacer()
-                                DatePicker(
-                                    "",
-                                    selection: $workoutDate,
-                                    displayedComponents: [.date]
-                                )
-                                .labelsHidden()
-                            }
+                            Spacer()
+                            DatePicker(
+                                "",
+                                selection: $workoutDate,
+                                displayedComponents: [.date]
+                            )
+                            .labelsHidden()
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -3619,7 +3739,56 @@ struct LiveWorkoutView: View {
                             )
                     )
 
-                    if usesManualDate, isFutureDay(workoutDate) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack {
+                            Text("Time")
+                                .font(.custom("Avenir Next", size: 11))
+                                .foregroundStyle(themedSecondaryText())
+                            Spacer()
+                            if isNowTime(manualStartTime) || isNowTime(manualEndTime) {
+                                Text("Now")
+                                    .font(.custom("Avenir Next", size: 11))
+                                    .foregroundStyle(themedSecondaryText())
+                            }
+                        }
+                        HStack {
+                            Text("Start")
+                                .font(.custom("Avenir Next", size: 13))
+                                .foregroundStyle(themedSecondaryText())
+                            Spacer()
+                            DatePicker(
+                                "",
+                                selection: $manualStartTime,
+                                displayedComponents: [.hourAndMinute]
+                            )
+                            .labelsHidden()
+                        }
+
+                        HStack {
+                            Text("End")
+                                .font(.custom("Avenir Next", size: 13))
+                                .foregroundStyle(themedSecondaryText())
+                            Spacer()
+                            DatePicker(
+                                "",
+                                selection: $manualEndTime,
+                                displayedComponents: [.hourAndMinute]
+                            )
+                            .labelsHidden()
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(14)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14)
+                            .fill(themeColor(.card))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 14)
+                                    .stroke(themeColor(.sand).opacity(0.08), lineWidth: 1)
+                            )
+                    )
+
+                    if isFutureDay(workoutDate) {
                         Text("Future date")
                             .font(.custom("Avenir Next", size: 11))
                             .foregroundStyle(themedSecondaryText())
@@ -3648,7 +3817,7 @@ struct LiveWorkoutView: View {
                                 ExerciseTimelineCard(
                                     exercise: exercise,
                                     weightUnit: store.defaultWeightUnit,
-                                    timestamp: drafts[index].loggedAt
+                                    timestamp: displayTimestamp(for: index)
                                 )
                             }
                             .buttonStyle(.plain)
@@ -3768,20 +3937,43 @@ struct LiveWorkoutView: View {
     private func finishWorkout() {
         let exercises = completedIndices.compactMap { index -> WorkoutExercise? in
             guard let exercise = workoutExercise(from: drafts[index]) else { return nil }
-            let adjustedLoggedAt = adjustedDate(exercise.loggedAt)
-            return WorkoutExercise(
-                id: exercise.id,
-                name: exercise.name,
-                type: exercise.type,
-                sets: exercise.sets,
-                durationSeconds: exercise.durationSeconds,
-                calories: exercise.calories,
-                loggedAt: adjustedLoggedAt,
-                exerciseEntry: exercise.exerciseEntry
-            )
+            return exercise
         }
         guard !exercises.isEmpty else { return }
-        store.addSession(date: sessionDate(from: exercises), exercises: exercises)
+        let finalExercises: [WorkoutExercise]
+        if usesManualTimes {
+            let start = combineDate(workoutDate, time: manualStartTime)
+            let end = combineDate(workoutDate, time: manualEndTime)
+            let times = distributedTimes(count: exercises.count, start: start, end: end)
+            finalExercises = exercises.enumerated().map { index, exercise in
+                WorkoutExercise(
+                    id: exercise.id,
+                    name: exercise.name,
+                    type: exercise.type,
+                    sets: exercise.sets,
+                    durationSeconds: exercise.durationSeconds,
+                    calories: exercise.calories,
+                    loggedAt: times[index],
+                    exerciseEntry: exercise.exerciseEntry
+                )
+            }
+        } else {
+            let fallback = combineDate(workoutDate, time: Date())
+            finalExercises = exercises.map { exercise in
+                let loggedAt = exercise.loggedAt ?? fallback
+                return WorkoutExercise(
+                    id: exercise.id,
+                    name: exercise.name,
+                    type: exercise.type,
+                    sets: exercise.sets,
+                    durationSeconds: exercise.durationSeconds,
+                    calories: exercise.calories,
+                    loggedAt: loggedAt,
+                    exerciseEntry: exercise.exerciseEntry
+                )
+            }
+        }
+        store.addSession(date: sessionDate(from: finalExercises), exercises: finalExercises)
         if store.isExerciseNotesEnabled {
             for index in completedIndices {
                 let draft = drafts[index]
@@ -3791,12 +3983,6 @@ struct LiveWorkoutView: View {
             }
         }
         dismiss()
-    }
-
-    private func adjustedDate(_ date: Date?) -> Date? {
-        guard let date else { return nil }
-        guard usesManualDate else { return date }
-        return combineDate(workoutDate, time: date)
     }
 
     private func sessionDate(from exercises: [WorkoutExercise]) -> Date {
@@ -3817,10 +4003,31 @@ struct LiveWorkoutView: View {
     }
 
     private var scheduleSummary: String {
-        if usesManualDate == false {
-            return "\(relativeLabel(for: Date())) · Live"
+        if usesManualTimes == false || shouldUseLiveSchedule() {
+            return "\(relativeLabel(for: Date())) · Now"
         }
-        return relativeLabel(for: workoutDate)
+        let dateLabel = relativeLabel(for: workoutDate)
+        let seeStartLabel = manualStartTime.formatted(date: .omitted, time: .shortened)
+        let endLabel = manualEndTime.formatted(date: .omitted, time: .shortened)
+        return "\(dateLabel) · \(seeStartLabel) – \(endLabel)"
+    }
+
+    private func shouldUseLiveSchedule() -> Bool {
+        Calendar.current.isDateInToday(workoutDate)
+            && isNowTime(manualStartTime)
+            && isNowTime(manualEndTime)
+    }
+
+    private func displayTimestamp(for index: Int) -> Date? {
+        if usesManualTimes {
+            let indices = completedIndices
+            guard let position = indices.firstIndex(of: index) else { return nil }
+            let start = combineDate(workoutDate, time: manualStartTime)
+            let end = combineDate(workoutDate, time: manualEndTime)
+            let times = distributedTimes(count: indices.count, start: start, end: end)
+            return times[position]
+        }
+        return drafts[index].loggedAt
     }
 
     private func workoutExercise(from draft: ExerciseDraft) -> WorkoutExercise? {
@@ -4709,10 +4916,35 @@ struct AddWorkoutView: View {
 
     private func fillMissingTimes(_ exercises: [WorkoutExercise]) -> [WorkoutExercise] {
         let fallback = combineDate(workoutDate, time: Date())
+        var lastLoggedAt: Date?
+        var lastType: ExerciseType?
+        var lastDurationSeconds: Int?
+
         return exercises.map { exercise in
-            if exercise.loggedAt != nil {
+            if let loggedAt = exercise.loggedAt {
+                lastLoggedAt = loggedAt
+                lastType = exercise.type
+                lastDurationSeconds = exercise.durationSeconds
                 return exercise
             }
+
+            let base = lastLoggedAt ?? fallback
+            let increment: TimeInterval
+            if let lastType {
+                if lastType == .cardio {
+                    let duration = lastDurationSeconds ?? 0
+                    increment = duration > 0 ? TimeInterval(duration) : 60
+                } else {
+                    increment = 300
+                }
+            } else {
+                increment = 0
+            }
+            let assigned = base.addingTimeInterval(increment)
+            lastLoggedAt = assigned
+            lastType = exercise.type
+            lastDurationSeconds = exercise.durationSeconds
+
             return WorkoutExercise(
                 id: exercise.id,
                 name: exercise.name,
@@ -4720,7 +4952,7 @@ struct AddWorkoutView: View {
                 sets: exercise.sets,
                 durationSeconds: exercise.durationSeconds,
                 calories: exercise.calories,
-                loggedAt: fallback,
+                loggedAt: assigned,
                 exerciseEntry: exercise.exerciseEntry
             )
         }
