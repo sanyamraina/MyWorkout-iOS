@@ -785,6 +785,89 @@ struct BackupDocument: FileDocument {
     }
 }
 
+enum DraftKind: String, Codable {
+    case live
+    case add
+    case templateFlow
+
+    var fileName: String {
+        "draft-\(rawValue).json"
+    }
+}
+
+struct LiveWorkoutDraft: Codable {
+    let workoutDate: Date
+    let usesManualTimes: Bool
+    let manualStartTime: Date
+    let manualEndTime: Date
+    let drafts: [ExerciseDraft]
+    let newDraftIds: Set<UUID>
+    let pendingTemplateDrafts: [ExerciseDraft]
+    let selectedDraftId: UUID?
+}
+
+struct AddWorkoutDraft: Codable {
+    let sessionId: UUID?
+    let workoutDate: Date
+    let usesManualTimes: Bool
+    let manualStartTime: Date
+    let manualEndTime: Date
+    let drafts: [ExerciseDraft]
+    let showsTimeEditor: Bool
+    let isTimeConfirmed: Bool
+}
+
+struct TemplateFlowDraft: Codable {
+    let templateId: UUID
+    let workoutDate: Date
+    let usesManualTimes: Bool
+    let manualStartTime: Date
+    let manualEndTime: Date
+    let drafts: [ExerciseDraft]
+    let templateExercises: [TemplateExercise]
+    let addToTemplateDraftIds: Set<UUID>
+    let newDraftIds: Set<UUID>
+    let hasStarted: Bool
+    let showsTimeEditor: Bool
+    let isTimeConfirmed: Bool
+}
+
+private struct DraftStore {
+    static func load<T: Codable>(_ kind: DraftKind, as type: T.Type) -> T? {
+        do {
+            let data = try Data(contentsOf: fileURL(for: kind))
+            return try JSONDecoder().decode(T.self, from: data)
+        } catch {
+            return nil
+        }
+    }
+
+    static func save<T: Codable>(_ payload: T, kind: DraftKind) {
+        do {
+            let data = try JSONEncoder().encode(payload)
+            let url = fileURL(for: kind)
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true,
+                attributes: nil
+            )
+            try data.write(to: url, options: [.atomic])
+        } catch {
+            // Ignore write failures; drafts are best-effort.
+        }
+    }
+
+    static func clear(_ kind: DraftKind) {
+        let url = fileURL(for: kind)
+        try? FileManager.default.removeItem(at: url)
+    }
+
+    private static func fileURL(for kind: DraftKind) -> URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        return base.appendingPathComponent("MyWorkout/\(kind.fileName)")
+    }
+}
+
 final class WorkoutStore: ObservableObject {
     @Published private(set) var entries: [WorkoutExercise] = []
     @Published private(set) var sessions: [WorkoutSession] = []
@@ -3465,7 +3548,7 @@ struct ExerciseHistoryCard: View {
     }
 }
 
-struct ExerciseDraft: Identifiable, Equatable {
+struct ExerciseDraft: Identifiable, Equatable, Codable {
     let id: UUID
     var name: String
     var type: ExerciseType
@@ -3523,7 +3606,7 @@ struct ExerciseDraft: Identifiable, Equatable {
     }
 }
 
-struct WorkoutSetSegmentDraft: Identifiable, Equatable {
+struct WorkoutSetSegmentDraft: Identifiable, Equatable, Codable {
     let id: UUID
     var weight: String
     var reps: String
@@ -3551,7 +3634,7 @@ struct WorkoutSetSegmentDraft: Identifiable, Equatable {
     }
 }
 
-struct WorkoutSetDraft: Identifiable, Equatable {
+struct WorkoutSetDraft: Identifiable, Equatable, Codable {
     let id: UUID
     var segments: [WorkoutSetSegmentDraft]
 
@@ -3564,6 +3647,35 @@ struct WorkoutSetDraft: Identifiable, Equatable {
     }
 }
 
+private extension ExerciseDraft {
+    var hasContent: Bool {
+        if !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return true
+        }
+        if !durationMinutes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return true
+        }
+        if !calories.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return true
+        }
+        if !exerciseNote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return true
+        }
+        if !exerciseEntry.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return true
+        }
+        for set in sets {
+            for segment in set.segments {
+                if !segment.weight.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                    !segment.reps.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+}
+
 private struct DraftSelection: Identifiable {
     let id: UUID
     let index: Int
@@ -3573,6 +3685,7 @@ struct LiveWorkoutView: View {
     @ObservedObject var store: WorkoutStore
     let template: WorkoutTemplate?
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
 
     @State private var workoutDate = Date()
     @State private var usesManualTimes = false
@@ -3586,6 +3699,10 @@ struct LiveWorkoutView: View {
     @State private var pendingDeleteIndex: Int?
     @State private var showDeleteConfirm = false
     @State private var hasLoadedDrafts = false
+    @State private var hasUserEdits = false
+    @State private var showResumePrompt = false
+    @State private var pendingResumeDraft: LiveWorkoutDraft?
+    @State private var autosaveWorkItem: DispatchWorkItem?
 
     var body: some View {
         ZStack {
@@ -3647,29 +3764,150 @@ struct LiveWorkoutView: View {
         }
         .onAppear {
             guard !hasLoadedDrafts else { return }
-            hasLoadedDrafts = true
-            workoutDate = Date()
-            manualStartTime = Date()
-            manualEndTime = Date()
-            if let template {
-                pendingTemplateDrafts = store.resolvedDrafts(for: template)
-                if drafts.isEmpty, !pendingTemplateDrafts.isEmpty {
-                    startNextExercise()
-                }
-            }
+            loadDraftIfNeeded()
         }
         .onChange(of: manualStartTime) { _, newValue in
             let minimumEnd = Calendar.current.date(byAdding: .minute, value: 5, to: newValue) ?? newValue
             if manualEndTime < minimumEnd {
                 manualEndTime = minimumEnd
             }
+            handleUserEdit()
         }
         .onChange(of: manualEndTime) { _, newValue in
             let minimumEnd = Calendar.current.date(byAdding: .minute, value: 5, to: manualStartTime) ?? manualStartTime
             if newValue < minimumEnd {
                 manualEndTime = minimumEnd
             }
+            handleUserEdit()
         }
+        .onChange(of: workoutDate) { _, _ in
+            handleUserEdit()
+        }
+        .onChange(of: usesManualTimes) { _, _ in
+            handleUserEdit()
+        }
+        .onChange(of: drafts) { _, _ in
+            handleUserEdit()
+        }
+        .onChange(of: newDraftIds) { _, _ in
+            handleUserEdit()
+        }
+        .onChange(of: pendingTemplateDrafts) { _, _ in
+            handleUserEdit()
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            if newPhase != .active {
+                persistDraftIfNeeded()
+            }
+        }
+        .alert("Resume workout?", isPresented: $showResumePrompt) {
+            Button("Discard", role: .destructive) {
+                pendingResumeDraft = nil
+                DraftStore.clear(.live)
+                initializeFreshWorkout()
+            }
+            Button("Resume") {
+                if let pendingResumeDraft {
+                    applyResumeDraft(pendingResumeDraft)
+                } else {
+                    initializeFreshWorkout()
+                }
+                pendingResumeDraft = nil
+            }
+        } message: {
+            Text("We saved your in-progress workout so you can pick up where you left off.")
+        }
+    }
+
+    private func loadDraftIfNeeded() {
+        if let saved = DraftStore.load(.live, as: LiveWorkoutDraft.self) {
+            pendingResumeDraft = saved
+            showResumePrompt = true
+            return
+        }
+        initializeFreshWorkout()
+    }
+
+    private func initializeFreshWorkout() {
+        workoutDate = Date()
+        usesManualTimes = false
+        showsTimeEditor = false
+        manualStartTime = Date()
+        manualEndTime = Date()
+        drafts = []
+        newDraftIds = []
+        pendingTemplateDrafts = []
+        selectedDraft = nil
+        if let template {
+            pendingTemplateDrafts = store.resolvedDrafts(for: template)
+            if drafts.isEmpty, !pendingTemplateDrafts.isEmpty {
+                startNextExercise()
+            }
+        }
+        markLoaded(hasEdits: false)
+    }
+
+    private func applyResumeDraft(_ draft: LiveWorkoutDraft) {
+        workoutDate = draft.workoutDate
+        usesManualTimes = draft.usesManualTimes
+        manualStartTime = draft.manualStartTime
+        manualEndTime = draft.manualEndTime
+        drafts = draft.drafts
+        newDraftIds = draft.newDraftIds
+        pendingTemplateDrafts = draft.pendingTemplateDrafts
+        if let selectedId = draft.selectedDraftId ?? newDraftIds.first,
+           let index = drafts.firstIndex(where: { $0.id == selectedId }) {
+            selectedDraft = DraftSelection(id: selectedId, index: index)
+        }
+        markLoaded(hasEdits: true)
+    }
+
+    private func markLoaded(hasEdits: Bool) {
+        DispatchQueue.main.async {
+            hasLoadedDrafts = true
+            hasUserEdits = hasEdits
+        }
+    }
+
+    private func handleUserEdit() {
+        guard hasLoadedDrafts else { return }
+        hasUserEdits = true
+        scheduleAutosave()
+    }
+
+    private var shouldPersistDraft: Bool {
+        guard hasUserEdits else { return false }
+        let hasDraftContent = drafts.contains { $0.hasContent } || pendingTemplateDrafts.contains { $0.hasContent }
+        let hasScheduleChange = usesManualTimes || !Calendar.current.isDateInToday(workoutDate)
+        return hasDraftContent || hasScheduleChange
+    }
+
+    private func scheduleAutosave() {
+        autosaveWorkItem?.cancel()
+        let workItem = DispatchWorkItem {
+            persistDraftIfNeeded()
+        }
+        autosaveWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: workItem)
+    }
+
+    private func persistDraftIfNeeded() {
+        guard hasLoadedDrafts else { return }
+        guard shouldPersistDraft else {
+            DraftStore.clear(.live)
+            return
+        }
+        let payload = LiveWorkoutDraft(
+            workoutDate: workoutDate,
+            usesManualTimes: usesManualTimes,
+            manualStartTime: manualStartTime,
+            manualEndTime: manualEndTime,
+            drafts: drafts,
+            newDraftIds: newDraftIds,
+            pendingTemplateDrafts: pendingTemplateDrafts,
+            selectedDraftId: selectedDraft?.id ?? newDraftIds.first
+        )
+        DraftStore.save(payload, kind: .live)
     }
 
     private var scheduleCard: some View {
@@ -3866,6 +4104,7 @@ struct LiveWorkoutView: View {
             .opacity(completedIndices.isEmpty ? 0.4 : 1)
 
             Button {
+                DraftStore.clear(.live)
                 dismiss()
             } label: {
                 Text("Cancel")
@@ -3930,6 +4169,7 @@ struct LiveWorkoutView: View {
         drafts.remove(at: index)
         newDraftIds.remove(draftId)
         if draft.isNameLocked && completedIndices.isEmpty {
+            DraftStore.clear(.live)
             dismiss()
         }
     }
@@ -3982,6 +4222,7 @@ struct LiveWorkoutView: View {
                 store.setExerciseNote(draft.exerciseNote, for: name)
             }
         }
+        DraftStore.clear(.live)
         dismiss()
     }
 
@@ -4208,10 +4449,12 @@ struct AddWorkoutView: View {
     let template: WorkoutTemplate?
     let session: WorkoutSession?
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
 
     @State private var workoutDate = Date()
     @State private var drafts: [ExerciseDraft] = []
     @State private var hasLoadedDrafts = false
+    @State private var hasUserEdits = false
     @State private var showsTimeEditor = false
     @State private var usesManualTimes = false
     @State private var manualStartTime = Date()
@@ -4220,6 +4463,9 @@ struct AddWorkoutView: View {
     @State private var showSpotHud = false
     @State private var spotHudMessage = ""
     @State private var spotHudDismissWorkItem: DispatchWorkItem?
+    @State private var showResumePrompt = false
+    @State private var pendingResumeDraft: AddWorkoutDraft?
+    @State private var autosaveWorkItem: DispatchWorkItem?
 
     private var validation: (validExercises: [WorkoutExercise], hasInvalid: Bool) {
         var validExercises: [WorkoutExercise] = []
@@ -4470,6 +4716,7 @@ struct AddWorkoutView: View {
             if requiresTimeConfirmation {
                 isTimeConfirmed = false
             }
+            handleUserEdit()
         }
         .onChange(of: manualEndTime) { _, newValue in
             let minimumEnd = Calendar.current.date(byAdding: .minute, value: 5, to: manualStartTime) ?? manualStartTime
@@ -4479,16 +4726,30 @@ struct AddWorkoutView: View {
             if requiresTimeConfirmation {
                 isTimeConfirmed = false
             }
+            handleUserEdit()
         }
         .onChange(of: workoutDate) { _, newValue in
             if Calendar.current.isDateInToday(newValue) {
                 isTimeConfirmed = true
+                handleUserEdit()
                 return
             }
             usesManualTimes = true
             showsTimeEditor = true
             isTimeConfirmed = false
             setDefaultManualTimes()
+            handleUserEdit()
+        }
+        .onChange(of: usesManualTimes) { _, _ in
+            handleUserEdit()
+        }
+        .onChange(of: drafts) { _, _ in
+            handleUserEdit()
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            if newPhase != .active {
+                persistDraftIfNeeded()
+            }
         }
         .onChange(of: workoutDate) { _, newValue in
             if Calendar.current.isDateInToday(newValue) {
@@ -4530,6 +4791,7 @@ struct AddWorkoutView: View {
                             store.setExerciseNote(draft.exerciseNote, for: name)
                         }
                     }
+                    DraftStore.clear(.add)
                     dismiss()
                 } label: {
                     Text(saveLabel)
@@ -4544,6 +4806,7 @@ struct AddWorkoutView: View {
                 .opacity(canSave ? 1 : 0.4)
 
                 Button {
+                    DraftStore.clear(.add)
                     dismiss()
                 } label: {
                     Text("Cancel")
@@ -4571,28 +4834,126 @@ struct AddWorkoutView: View {
                 .ignoresSafeArea()
             )
         }
+        .alert("Resume workout?", isPresented: $showResumePrompt) {
+            Button("Discard", role: .destructive) {
+                pendingResumeDraft = nil
+                DraftStore.clear(.add)
+                initializeFreshDraft()
+            }
+            Button("Resume") {
+                if let pendingResumeDraft {
+                    applyResumeDraft(pendingResumeDraft)
+                } else {
+                    initializeFreshDraft()
+                }
+                pendingResumeDraft = nil
+            }
+        } message: {
+            Text("We saved your in-progress workout so you can pick up where you left off.")
+        }
         .onAppear {
             guard !hasLoadedDrafts else { return }
-            hasLoadedDrafts = true
-            if let session {
-                workoutDate = session.date
-                drafts = drafts(for: session)
-                if requiresTimeConfirmation {
-                    setDefaultManualTimes()
-                } else {
-                    manualStartTime = Date()
-                    manualEndTime = Date()
-                }
+            loadDraftIfNeeded()
+        }
+    }
+
+    private func loadDraftIfNeeded() {
+        if let saved = DraftStore.load(.add, as: AddWorkoutDraft.self) {
+            let matchesSession = saved.sessionId == session?.id
+            let matchesNew = saved.sessionId == nil && session == nil
+            if matchesSession || matchesNew {
+                pendingResumeDraft = saved
+                showResumePrompt = true
                 return
             }
-            if let template {
-                drafts = store.resolvedDrafts(for: template)
-            } else {
-                drafts = [ExerciseDraft(weightUnit: store.defaultWeightUnit)]
-            }
-            manualStartTime = Date()
-            manualEndTime = Date()
         }
+        initializeFreshDraft()
+    }
+
+    private func initializeFreshDraft() {
+        usesManualTimes = false
+        showsTimeEditor = false
+        isTimeConfirmed = true
+        if let session {
+            workoutDate = session.date
+            drafts = drafts(for: session)
+            if requiresTimeConfirmation {
+                setDefaultManualTimes()
+            } else {
+                manualStartTime = Date()
+                manualEndTime = Date()
+            }
+            markLoaded(hasEdits: false)
+            return
+        }
+        workoutDate = Date()
+        if let template {
+            drafts = store.resolvedDrafts(for: template)
+        } else {
+            drafts = [ExerciseDraft(weightUnit: store.defaultWeightUnit)]
+        }
+        manualStartTime = Date()
+        manualEndTime = Date()
+        markLoaded(hasEdits: false)
+    }
+
+    private func applyResumeDraft(_ draft: AddWorkoutDraft) {
+        workoutDate = draft.workoutDate
+        usesManualTimes = draft.usesManualTimes
+        manualStartTime = draft.manualStartTime
+        manualEndTime = draft.manualEndTime
+        drafts = draft.drafts
+        showsTimeEditor = draft.showsTimeEditor
+        isTimeConfirmed = draft.isTimeConfirmed
+        markLoaded(hasEdits: true)
+    }
+
+    private func markLoaded(hasEdits: Bool) {
+        DispatchQueue.main.async {
+            hasLoadedDrafts = true
+            hasUserEdits = hasEdits
+        }
+    }
+
+    private func handleUserEdit() {
+        guard hasLoadedDrafts else { return }
+        hasUserEdits = true
+        scheduleAutosave()
+    }
+
+    private var shouldPersistDraft: Bool {
+        guard hasUserEdits else { return false }
+        let hasDraftContent = drafts.contains { $0.hasContent }
+        let hasScheduleChange = usesManualTimes || !Calendar.current.isDateInToday(workoutDate)
+        return hasDraftContent || hasScheduleChange
+    }
+
+    private func scheduleAutosave() {
+        autosaveWorkItem?.cancel()
+        let workItem = DispatchWorkItem {
+            persistDraftIfNeeded()
+        }
+        autosaveWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: workItem)
+    }
+
+    private func persistDraftIfNeeded() {
+        guard hasLoadedDrafts else { return }
+        guard shouldPersistDraft else {
+            DraftStore.clear(.add)
+            return
+        }
+        let payload = AddWorkoutDraft(
+            sessionId: session?.id,
+            workoutDate: workoutDate,
+            usesManualTimes: usesManualTimes,
+            manualStartTime: manualStartTime,
+            manualEndTime: manualEndTime,
+            drafts: drafts,
+            showsTimeEditor: showsTimeEditor,
+            isTimeConfirmed: isTimeConfirmed
+        )
+        DraftStore.save(payload, kind: .add)
     }
 
     private func presentSpotHud(message: String) {
@@ -4975,10 +5336,12 @@ struct TemplateFlowView: View {
     @ObservedObject var store: WorkoutStore
     let template: WorkoutTemplate
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
 
     @State private var workoutDate = Date()
     @State private var drafts: [ExerciseDraft] = []
     @State private var hasLoadedDrafts = false
+    @State private var hasUserEdits = false
     @State private var templateExercises: [TemplateExercise] = []
     @State private var addToTemplateDraftIds: Set<UUID> = []
     @State private var newDraftIds: Set<UUID> = []
@@ -4993,6 +5356,9 @@ struct TemplateFlowView: View {
     @State private var showAddExercisePrompt = false
     @State private var pendingDeleteIndex: Int?
     @State private var showDeleteTemplateConfirm = false
+    @State private var showResumePrompt = false
+    @State private var pendingResumeDraft: TemplateFlowDraft?
+    @State private var autosaveWorkItem: DispatchWorkItem?
 
     private var completion: (exercises: [WorkoutExercise], hasInvalid: Bool) {
         var exercises: [WorkoutExercise] = []
@@ -5018,6 +5384,134 @@ struct TemplateFlowView: View {
     }
 
     var body: some View {
+        let base = AnyView(templateFlowBase)
+        let withChanges = AnyView(base
+            .onChange(of: manualStartTime) { _, newValue in
+                let minimumEnd = Calendar.current.date(byAdding: .minute, value: 5, to: newValue) ?? newValue
+                if manualEndTime < minimumEnd {
+                    manualEndTime = minimumEnd
+                }
+                if requiresTimeConfirmation {
+                    isTimeConfirmed = false
+                }
+                handleUserEdit()
+            }
+            .onChange(of: manualEndTime) { _, newValue in
+                let minimumEnd = Calendar.current.date(byAdding: .minute, value: 5, to: manualStartTime) ?? manualStartTime
+                if newValue < minimumEnd {
+                    manualEndTime = minimumEnd
+                }
+                if requiresTimeConfirmation {
+                    isTimeConfirmed = false
+                }
+                handleUserEdit()
+            }
+            .onChange(of: workoutDate) { _, _ in
+                handleUserEdit()
+            }
+            .onChange(of: usesManualTimes) { _, _ in
+                handleUserEdit()
+            }
+            .onChange(of: hasStarted) { _, _ in
+                handleUserEdit()
+            }
+            .onChange(of: drafts) { _, _ in
+                handleUserEdit()
+            }
+            .onChange(of: newDraftIds) { _, _ in
+                handleUserEdit()
+            }
+            .onChange(of: addToTemplateDraftIds) { _, _ in
+                handleUserEdit()
+            }
+            .onChange(of: templateExercises) { _, _ in
+                handleUserEdit()
+            }
+            .onChange(of: scenePhase) { _, newPhase in
+                if newPhase != .active {
+                    persistDraftIfNeeded()
+                }
+            }
+        )
+        let withDialogs = AnyView(withChanges
+            .sheet(item: $selectedExercise) { selection in
+                if drafts.indices.contains(selection.index) {
+                    TemplateExerciseEntryView(
+                        store: store,
+                        workoutDate: workoutDate,
+                        usesManualTimes: usesManualTimes,
+                        draft: $drafts[selection.index],
+                        onSave: handleTemplateSave,
+                        onCancel: {
+                            handleTemplateCancel(draftId: drafts[selection.index].id)
+                        }
+                    )
+                }
+            }
+            .confirmationDialog("Add Exercise", isPresented: $showAddExercisePrompt) {
+                Button("Just this workout") {
+                    addExercise(addToTemplate: false)
+                }
+                Button("Add to template") {
+                    addExercise(addToTemplate: true)
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Should this exercise live only in this workout, or be saved back to the template?")
+            }
+            .alert("Remove from Template?", isPresented: $showDeleteTemplateConfirm) {
+                Button("Cancel", role: .cancel) {}
+                Button("Remove", role: .destructive) {
+                    removeDraftFromTemplate()
+                }
+            } message: {
+                Text("This will remove the exercise from the template and the current workout.")
+            }
+            .alert("Resume workout?", isPresented: $showResumePrompt) {
+                Button("Discard", role: .destructive) {
+                    pendingResumeDraft = nil
+                    DraftStore.clear(.templateFlow)
+                    initializeFreshFlow()
+                }
+                Button("Resume") {
+                    if let pendingResumeDraft {
+                        applyResumeDraft(pendingResumeDraft)
+                    } else {
+                        initializeFreshFlow()
+                    }
+                    pendingResumeDraft = nil
+                }
+            } message: {
+                Text("We saved your in-progress workout so you can pick up where you left off.")
+            }
+            .alert("Finish Template?", isPresented: $showFinishConfirm) {
+                Button("Cancel", role: .cancel) {}
+                Button("Finish") {
+                    let exercises = applyTimes(to: completion.exercises)
+                    store.addSession(date: sessionDate(from: exercises), exercises: exercises)
+                    store.incrementTemplateUsage(for: template)
+                    if store.isExerciseNotesEnabled {
+                        for draft in drafts {
+                            let name = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                            guard !name.isEmpty else { continue }
+                            store.setExerciseNote(draft.exerciseNote, for: name)
+                        }
+                    }
+                    DraftStore.clear(.templateFlow)
+                    dismiss()
+                }
+            } message: {
+                Text("This will save the completed exercises as one workout session.")
+            }
+            .onAppear {
+                guard !hasLoadedDrafts else { return }
+                loadDraftIfNeeded()
+            }
+        )
+        return withDialogs
+    }
+
+    private var templateFlowBase: some View {
         ZStack {
             LinearGradient(
                 colors: [themeColor(.night), themeColor(.coal)],
@@ -5102,24 +5596,6 @@ struct TemplateFlowView: View {
                 startScreen
             }
         }
-        .onChange(of: manualStartTime) { _, newValue in
-            let minimumEnd = Calendar.current.date(byAdding: .minute, value: 5, to: newValue) ?? newValue
-            if manualEndTime < minimumEnd {
-                manualEndTime = minimumEnd
-            }
-            if requiresTimeConfirmation {
-                isTimeConfirmed = false
-            }
-        }
-        .onChange(of: manualEndTime) { _, newValue in
-            let minimumEnd = Calendar.current.date(byAdding: .minute, value: 5, to: manualStartTime) ?? manualStartTime
-            if newValue < minimumEnd {
-                manualEndTime = minimumEnd
-            }
-            if requiresTimeConfirmation {
-                isTimeConfirmed = false
-            }
-        }
         .safeAreaInset(edge: .bottom) {
             if hasStarted {
                 VStack(spacing: 10) {
@@ -5143,6 +5619,7 @@ struct TemplateFlowView: View {
                     .opacity(canFinish ? 1 : 0.4)
 
                     Button {
+                        DraftStore.clear(.templateFlow)
                         dismiss()
                     } label: {
                         Text("Cancel")
@@ -5171,75 +5648,109 @@ struct TemplateFlowView: View {
                 )
             }
         }
-        .sheet(item: $selectedExercise) { selection in
-            if drafts.indices.contains(selection.index) {
-                TemplateExerciseEntryView(
-                    store: store,
-                    workoutDate: workoutDate,
-                    usesManualTimes: usesManualTimes,
-                    draft: $drafts[selection.index],
-                    onSave: handleTemplateSave,
-                    onCancel: {
-                        handleTemplateCancel(draftId: drafts[selection.index].id)
-                    }
+    }
+
+    private func loadDraftIfNeeded() {
+        if let saved = DraftStore.load(.templateFlow, as: TemplateFlowDraft.self),
+           saved.templateId == template.id {
+            pendingResumeDraft = saved
+            showResumePrompt = true
+            return
+        }
+        initializeFreshFlow()
+    }
+
+    private func initializeFreshFlow() {
+        workoutDate = Date()
+        usesManualTimes = false
+        showsTimeEditor = false
+        isTimeConfirmed = true
+        hasStarted = false
+        templateExercises = template.exercises
+        drafts = store.resolvedDrafts(for: template)
+        if drafts.isEmpty || drafts.count != templateExercises.count {
+            drafts = templateExercises.map {
+                ExerciseDraft(
+                    name: $0.name,
+                    type: $0.type,
+                    sets: $0.type == .weights ? [WorkoutSetDraft()] : [],
+                    weightUnit: store.defaultWeightUnit
                 )
             }
         }
-        .confirmationDialog("Add Exercise", isPresented: $showAddExercisePrompt) {
-            Button("Just this workout") {
-                addExercise(addToTemplate: false)
-            }
-            Button("Add to template") {
-                addExercise(addToTemplate: true)
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Should this exercise live only in this workout, or be saved back to the template?")
-        }
-        .alert("Remove from Template?", isPresented: $showDeleteTemplateConfirm) {
-            Button("Cancel", role: .cancel) {}
-            Button("Remove", role: .destructive) {
-                removeDraftFromTemplate()
-            }
-        } message: {
-            Text("This will remove the exercise from the template and the current workout.")
-        }
-        .alert("Finish Template?", isPresented: $showFinishConfirm) {
-            Button("Cancel", role: .cancel) {}
-            Button("Finish") {
-                let exercises = applyTimes(to: completion.exercises)
-                store.addSession(date: sessionDate(from: exercises), exercises: exercises)
-                store.incrementTemplateUsage(for: template)
-                if store.isExerciseNotesEnabled {
-                    for draft in drafts {
-                        let name = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
-                        guard !name.isEmpty else { continue }
-                        store.setExerciseNote(draft.exerciseNote, for: name)
-                    }
-                }
-                dismiss()
-            }
-        } message: {
-            Text("This will save the completed exercises as one workout session.")
-        }
-        .onAppear {
-            guard !hasLoadedDrafts else { return }
+        addToTemplateDraftIds = []
+        newDraftIds = []
+        selectedExercise = nil
+        manualStartTime = Date()
+        manualEndTime = Date()
+        markLoaded(hasEdits: false)
+    }
+
+    private func applyResumeDraft(_ draft: TemplateFlowDraft) {
+        workoutDate = draft.workoutDate
+        usesManualTimes = draft.usesManualTimes
+        manualStartTime = draft.manualStartTime
+        manualEndTime = draft.manualEndTime
+        drafts = draft.drafts
+        templateExercises = draft.templateExercises
+        addToTemplateDraftIds = draft.addToTemplateDraftIds
+        newDraftIds = draft.newDraftIds
+        hasStarted = draft.hasStarted
+        showsTimeEditor = draft.showsTimeEditor
+        isTimeConfirmed = draft.isTimeConfirmed
+        markLoaded(hasEdits: true)
+    }
+
+    private func markLoaded(hasEdits: Bool) {
+        DispatchQueue.main.async {
             hasLoadedDrafts = true
-            templateExercises = template.exercises
-            drafts = store.resolvedDrafts(for: template)
-            if drafts.isEmpty || drafts.count != templateExercises.count {
-                drafts = templateExercises.map {
-                    ExerciseDraft(
-                        name: $0.name,
-                        type: $0.type,
-                        sets: $0.type == .weights ? [WorkoutSetDraft()] : [],
-                        weightUnit: store.defaultWeightUnit
-                    )
-                }
-            }
-            manualStartTime = Date()
-            manualEndTime = Date()
+            hasUserEdits = hasEdits
         }
+    }
+
+    private func handleUserEdit() {
+        guard hasLoadedDrafts else { return }
+        hasUserEdits = true
+        scheduleAutosave()
+    }
+
+    private var shouldPersistDraft: Bool {
+        guard hasUserEdits else { return false }
+        let hasDraftContent = drafts.contains { $0.hasContent }
+        let hasScheduleChange = usesManualTimes || !Calendar.current.isDateInToday(workoutDate)
+        return hasDraftContent || hasScheduleChange || hasStarted
+    }
+
+    private func scheduleAutosave() {
+        autosaveWorkItem?.cancel()
+        let workItem = DispatchWorkItem {
+            persistDraftIfNeeded()
+        }
+        autosaveWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: workItem)
+    }
+
+    private func persistDraftIfNeeded() {
+        guard hasLoadedDrafts else { return }
+        guard shouldPersistDraft else {
+            DraftStore.clear(.templateFlow)
+            return
+        }
+        let payload = TemplateFlowDraft(
+            templateId: template.id,
+            workoutDate: workoutDate,
+            usesManualTimes: usesManualTimes,
+            manualStartTime: manualStartTime,
+            manualEndTime: manualEndTime,
+            drafts: drafts,
+            templateExercises: templateExercises,
+            addToTemplateDraftIds: addToTemplateDraftIds,
+            newDraftIds: newDraftIds,
+            hasStarted: hasStarted,
+            showsTimeEditor: showsTimeEditor,
+            isTimeConfirmed: isTimeConfirmed
+        )
+        DraftStore.save(payload, kind: .templateFlow)
     }
 
     private var startScreen: some View {
@@ -5421,6 +5932,7 @@ struct TemplateFlowView: View {
             .opacity(requiresTimeConfirmation && !isTimeConfirmed ? 0.4 : 1)
 
             Button {
+                DraftStore.clear(.templateFlow)
                 dismiss()
             } label: {
                 Text("Cancel")
