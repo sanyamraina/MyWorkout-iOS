@@ -3372,6 +3372,8 @@ struct ExerciseDraft: Identifiable, Equatable {
     var isExerciseEntryExpanded: Bool
     var entryId: UUID?
     var loggedAt: Date?
+    var isNameLocked: Bool
+    var isTypeLocked: Bool
 
     init(
         id: UUID = UUID(),
@@ -3388,7 +3390,9 @@ struct ExerciseDraft: Identifiable, Equatable {
         exerciseEntry: String = "",
         isExerciseEntryExpanded: Bool = false,
         entryId: UUID? = nil,
-        loggedAt: Date? = nil
+        loggedAt: Date? = nil,
+        isNameLocked: Bool = false,
+        isTypeLocked: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -3405,6 +3409,8 @@ struct ExerciseDraft: Identifiable, Equatable {
         self.isExerciseEntryExpanded = isExerciseEntryExpanded
         self.entryId = entryId
         self.loggedAt = loggedAt
+        self.isNameLocked = isNameLocked
+        self.isTypeLocked = isTypeLocked
     }
 }
 
@@ -3724,9 +3730,11 @@ struct LiveWorkoutView: View {
     }
 
     private func startNextExercise() {
-        let draft: ExerciseDraft
+        var draft: ExerciseDraft
         if !pendingTemplateDrafts.isEmpty {
             draft = pendingTemplateDrafts.removeFirst()
+            draft.isNameLocked = true
+            draft.isTypeLocked = true
         } else {
             draft = ExerciseDraft(weightUnit: store.defaultWeightUnit)
         }
@@ -3747,10 +3755,14 @@ struct LiveWorkoutView: View {
 
     private func handleDraftCancel(at index: Int) {
         guard drafts.indices.contains(index) else { return }
-        let draftId = drafts[index].id
+        let draft = drafts[index]
+        let draftId = draft.id
         guard newDraftIds.contains(draftId) else { return }
         drafts.remove(at: index)
         newDraftIds.remove(draftId)
+        if draft.isNameLocked && completedIndices.isEmpty {
+            dismiss()
+        }
     }
 
     private func finishWorkout() {
@@ -3997,6 +4009,7 @@ struct AddWorkoutView: View {
     @State private var usesManualTimes = false
     @State private var manualStartTime = Date()
     @State private var manualEndTime = Date()
+    @State private var isTimeConfirmed = true
     @State private var showSpotHud = false
     @State private var spotHudMessage = ""
     @State private var spotHudDismissWorkItem: DispatchWorkItem?
@@ -4172,7 +4185,10 @@ struct AddWorkoutView: View {
     }
 
     private var canSave: Bool {
-        !drafts.isEmpty && !validExercises.isEmpty && !validation.hasInvalid
+        !drafts.isEmpty
+            && !validExercises.isEmpty
+            && !validation.hasInvalid
+            && (!requiresTimeConfirmation || isTimeConfirmed)
     }
 
     private var titleText: String {
@@ -4181,6 +4197,10 @@ struct AddWorkoutView: View {
 
     private var saveLabel: String {
         session == nil ? "Save Workout" : "Update Workout"
+    }
+
+    private var requiresTimeConfirmation: Bool {
+        !Calendar.current.isDateInToday(workoutDate)
     }
 
     var body: some View {
@@ -4240,12 +4260,38 @@ struct AddWorkoutView: View {
             if manualEndTime < minimumEnd {
                 manualEndTime = minimumEnd
             }
+            if requiresTimeConfirmation {
+                isTimeConfirmed = false
+            }
         }
         .onChange(of: manualEndTime) { _, newValue in
             let minimumEnd = Calendar.current.date(byAdding: .minute, value: 5, to: manualStartTime) ?? manualStartTime
             if newValue < minimumEnd {
                 manualEndTime = minimumEnd
             }
+            if requiresTimeConfirmation {
+                isTimeConfirmed = false
+            }
+        }
+        .onChange(of: workoutDate) { _, newValue in
+            if Calendar.current.isDateInToday(newValue) {
+                isTimeConfirmed = true
+                return
+            }
+            usesManualTimes = true
+            showsTimeEditor = true
+            isTimeConfirmed = false
+            setDefaultManualTimes()
+        }
+        .onChange(of: workoutDate) { _, newValue in
+            if Calendar.current.isDateInToday(newValue) {
+                isTimeConfirmed = true
+                return
+            }
+            usesManualTimes = true
+            showsTimeEditor = true
+            isTimeConfirmed = false
+            setDefaultManualTimes()
         }
         .contentShape(Rectangle())
         .onTapGesture {
@@ -4324,8 +4370,12 @@ struct AddWorkoutView: View {
             if let session {
                 workoutDate = session.date
                 drafts = drafts(for: session)
-                manualStartTime = Date()
-                manualEndTime = Date()
+                if requiresTimeConfirmation {
+                    setDefaultManualTimes()
+                } else {
+                    manualStartTime = Date()
+                    manualEndTime = Date()
+                }
                 return
             }
             if let template {
@@ -4404,7 +4454,8 @@ struct AddWorkoutView: View {
                 suggestions: suggestions,
                 suggestionDetail: store.muscleGroupLabel(for:),
                 showsMetrics: true,
-                knownType: store.exerciseType(for: draft.name),
+                knownType: draft.isTypeLocked ? draft.type : store.exerciseType(for: draft.name),
+                isNameLocked: draft.isNameLocked,
                 isDropSetsEnabled: store.isDropSetsEnabled,
                 isExerciseNotesEnabled: store.isExerciseNotesEnabled,
                 isExerciseEntryEnabled: store.isExerciseEntryEnabled,
@@ -4432,6 +4483,9 @@ struct AddWorkoutView: View {
             VStack(alignment: .leading, spacing: 12) {
                 Button {
                     if showsTimeEditor {
+                        if requiresTimeConfirmation && !isTimeConfirmed {
+                            return
+                        }
                         usesManualTimes = !shouldUseLiveSchedule()
                         showsTimeEditor = false
                     } else {
@@ -4544,6 +4598,28 @@ struct AddWorkoutView: View {
                             .font(.custom("Avenir Next", size: 11))
                             .foregroundStyle(themedSecondaryText())
                     }
+
+                    if requiresTimeConfirmation {
+                        Button {
+                            isTimeConfirmed = true
+                            showsTimeEditor = false
+                        } label: {
+                            Text(isTimeConfirmed ? "Time Confirmed" : "Confirm Time")
+                                .font(.custom("Avenir Next", size: 13))
+                                .foregroundStyle(themedAccentForeground())
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 8)
+                                .background(themeColor(.sand))
+                                .clipShape(Capsule())
+                        }
+                        .disabled(isTimeConfirmed)
+
+                        if !isTimeConfirmed {
+                            Text("Confirm the time for non-today workouts.")
+                                .font(.custom("Avenir Next", size: 11))
+                                .foregroundStyle(themedSecondaryText())
+                        }
+                    }
                 }
             }
         }
@@ -4576,6 +4652,14 @@ struct AddWorkoutView: View {
         Calendar.current.isDateInToday(workoutDate)
             && isNowTime(manualStartTime)
             && isNowTime(manualEndTime)
+    }
+
+    private func setDefaultManualTimes() {
+        let calendar = Calendar.current
+        let noon = calendar.date(bySettingHour: 12, minute: 0, second: 0, of: Date()) ?? Date()
+        let end = calendar.date(byAdding: .minute, value: 30, to: noon) ?? noon
+        manualStartTime = noon
+        manualEndTime = end
     }
 
     private func formattedOptionalInt(_ value: Int?) -> String {
@@ -4673,6 +4757,7 @@ struct TemplateFlowView: View {
     @State private var usesManualTimes = false
     @State private var manualStartTime = Date()
     @State private var manualEndTime = Date()
+    @State private var isTimeConfirmed = true
     @State private var showAddExercisePrompt = false
     @State private var pendingDeleteIndex: Int?
     @State private var showDeleteTemplateConfirm = false
@@ -4694,6 +4779,10 @@ struct TemplateFlowView: View {
 
     private var canFinish: Bool {
         !completion.exercises.isEmpty && !completion.hasInvalid
+    }
+
+    private var requiresTimeConfirmation: Bool {
+        !Calendar.current.isDateInToday(workoutDate)
     }
 
     var body: some View {
@@ -4786,11 +4875,17 @@ struct TemplateFlowView: View {
             if manualEndTime < minimumEnd {
                 manualEndTime = minimumEnd
             }
+            if requiresTimeConfirmation {
+                isTimeConfirmed = false
+            }
         }
         .onChange(of: manualEndTime) { _, newValue in
             let minimumEnd = Calendar.current.date(byAdding: .minute, value: 5, to: manualStartTime) ?? manualStartTime
             if newValue < minimumEnd {
                 manualEndTime = minimumEnd
+            }
+            if requiresTimeConfirmation {
+                isTimeConfirmed = false
             }
         }
         .safeAreaInset(edge: .bottom) {
@@ -4934,6 +5029,9 @@ struct TemplateFlowView: View {
                 VStack(alignment: .leading, spacing: 12) {
                     Button {
                         if showsTimeEditor {
+                            if requiresTimeConfirmation && !isTimeConfirmed {
+                                return
+                            }
                             usesManualTimes = !shouldUseLiveSchedule()
                             showsTimeEditor = false
                         } else {
@@ -5047,6 +5145,27 @@ struct TemplateFlowView: View {
                                 .foregroundStyle(themeColor(.sand).opacity(0.55))
                         }
 
+                        if requiresTimeConfirmation {
+                            Button {
+                                isTimeConfirmed = true
+                                showsTimeEditor = false
+                            } label: {
+                                Text(isTimeConfirmed ? "Time Confirmed" : "Confirm Time")
+                                    .font(.custom("Avenir Next", size: 13))
+                                    .foregroundStyle(themeColor(.night))
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 8)
+                                    .background(themeColor(.sand))
+                                    .clipShape(Capsule())
+                            }
+                            .disabled(isTimeConfirmed)
+
+                            if !isTimeConfirmed {
+                                Text("Confirm the time for non-today workouts.")
+                                    .font(.custom("Avenir Next", size: 11))
+                                    .foregroundStyle(themeColor(.sand).opacity(0.55))
+                            }
+                        }
                     }
                 }
 
@@ -5066,6 +5185,8 @@ struct TemplateFlowView: View {
                     .background(themeColor(.sand))
                     .clipShape(Capsule())
             }
+            .disabled(requiresTimeConfirmation && !isTimeConfirmed)
+            .opacity(requiresTimeConfirmation && !isTimeConfirmed ? 0.4 : 1)
 
             Button {
                 dismiss()
@@ -5643,7 +5764,8 @@ struct TemplateExerciseEntryView: View {
                         suggestions: store.exerciseNameCatalog(),
                         suggestionDetail: store.muscleGroupLabel(for:),
                         showsMetrics: true,
-                        knownType: store.exerciseType(for: draft.name),
+                        knownType: draft.isTypeLocked ? draft.type : store.exerciseType(for: draft.name),
+                        isNameLocked: draft.isNameLocked,
                         isDropSetsEnabled: store.isDropSetsEnabled,
                         isExerciseNotesEnabled: store.isExerciseNotesEnabled,
                         isExerciseEntryEnabled: store.isExerciseEntryEnabled,
@@ -5791,6 +5913,7 @@ struct ExerciseEditorRow: View {
     let suggestionDetail: ((String) -> String?)?
     let showsMetrics: Bool
     let knownType: ExerciseType?
+    let isNameLocked: Bool
     let isDropSetsEnabled: Bool
     let isExerciseNotesEnabled: Bool
     let isExerciseEntryEnabled: Bool
@@ -5817,6 +5940,7 @@ struct ExerciseEditorRow: View {
         suggestionDetail: ((String) -> String?)? = nil,
         showsMetrics: Bool,
         knownType: ExerciseType?,
+        isNameLocked: Bool = false,
         isDropSetsEnabled: Bool,
         isExerciseNotesEnabled: Bool,
         isExerciseEntryEnabled: Bool,
@@ -5834,6 +5958,7 @@ struct ExerciseEditorRow: View {
         self.suggestionDetail = suggestionDetail
         self.showsMetrics = showsMetrics
         self.knownType = knownType
+        self.isNameLocked = isNameLocked
         self.isDropSetsEnabled = isDropSetsEnabled
         self.isExerciseNotesEnabled = isExerciseNotesEnabled
         self.isExerciseEntryEnabled = isExerciseEntryEnabled
@@ -5923,6 +6048,8 @@ struct ExerciseEditorRow: View {
                         .font(.custom("Avenir Next", size: 14))
                         .foregroundStyle(themedSecondaryText())
                         .multilineTextAlignment(.center)
+                        .lineLimit(3)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(16)
                 .frame(maxWidth: .infinity)
@@ -5982,6 +6109,8 @@ struct ExerciseEditorRow: View {
                         .font(.custom("Avenir Next", size: 14))
                         .foregroundStyle(themedSecondaryText())
                         .multilineTextAlignment(.center)
+                        .lineLimit(3)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(16)
                 .frame(maxWidth: .infinity)
@@ -6102,6 +6231,7 @@ struct ExerciseEditorRow: View {
             text: $draft.name,
             suggestions: suggestions,
             suggestionDetail: suggestionDetail,
+            isLocked: isNameLocked,
             onFocusChange: { isFocused in
                 isNameFocused = isFocused
                 onNameFocusChange?(isFocused)
@@ -6937,6 +7067,7 @@ struct ExerciseNameField: View {
     @Binding var text: String
     let suggestions: [String]
     let suggestionDetail: ((String) -> String?)?
+    let isLocked: Bool
     let onFocusChange: ((Bool) -> Void)?
     @FocusState private var isFocused: Bool
 
@@ -6946,6 +7077,7 @@ struct ExerciseNameField: View {
         text: Binding<String>,
         suggestions: [String],
         suggestionDetail: ((String) -> String?)? = nil,
+        isLocked: Bool = false,
         onFocusChange: ((Bool) -> Void)? = nil
     ) {
         self.title = title
@@ -6953,10 +7085,12 @@ struct ExerciseNameField: View {
         self._text = text
         self.suggestions = suggestions
         self.suggestionDetail = suggestionDetail
+        self.isLocked = isLocked
         self.onFocusChange = onFocusChange
     }
 
     private var matches: [String] {
+        guard !isLocked else { return [] }
         let query = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !query.isEmpty else { return [] }
         return suggestions
@@ -7006,6 +7140,8 @@ struct ExerciseNameField: View {
                             )
                     )
                     .focused($isFocused)
+                    .disabled(isLocked)
+                    .opacity(isLocked ? 0.85 : 1)
 
                 if isFocused && !matches.isEmpty {
                     suggestionList
@@ -8153,7 +8289,8 @@ struct AddTemplateView: View {
                     suggestions: store.exerciseNameCatalog(),
                     suggestionDetail: store.muscleGroupLabel(for:),
                     showsMetrics: false,
-                    knownType: store.exerciseType(for: draft.name),
+                    knownType: draft.isTypeLocked ? draft.type : store.exerciseType(for: draft.name),
+                    isNameLocked: draft.isNameLocked,
                     isDropSetsEnabled: store.isDropSetsEnabled,
                     isExerciseNotesEnabled: store.isExerciseNotesEnabled,
                     isExerciseEntryEnabled: store.isExerciseEntryEnabled,
@@ -8304,7 +8441,8 @@ struct EditTemplateView: View {
                             suggestions: store.exerciseNameCatalog(),
                             suggestionDetail: store.muscleGroupLabel(for:),
                             showsMetrics: false,
-                            knownType: store.exerciseType(for: draft.name),
+                            knownType: draft.isTypeLocked ? draft.type : store.exerciseType(for: draft.name),
+                            isNameLocked: draft.isNameLocked,
                             isDropSetsEnabled: store.isDropSetsEnabled,
                             isExerciseNotesEnabled: store.isExerciseNotesEnabled,
                             isExerciseEntryEnabled: store.isExerciseEntryEnabled,
