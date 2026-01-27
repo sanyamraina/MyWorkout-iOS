@@ -796,6 +796,7 @@ enum DraftKind: String, Codable {
 }
 
 struct LiveWorkoutDraft: Codable {
+    let templateId: UUID?
     let workoutDate: Date
     let usesManualTimes: Bool
     let manualStartTime: Date
@@ -808,6 +809,7 @@ struct LiveWorkoutDraft: Codable {
 
 struct AddWorkoutDraft: Codable {
     let sessionId: UUID?
+    let templateId: UUID?
     let workoutDate: Date
     let usesManualTimes: Bool
     let manualStartTime: Date
@@ -3821,6 +3823,14 @@ struct LiveWorkoutView: View {
 
     private func loadDraftIfNeeded() {
         if let saved = DraftStore.load(.live, as: LiveWorkoutDraft.self) {
+            let currentTemplateId = template?.id
+            let matchesTemplate = saved.templateId == currentTemplateId
+                || (saved.templateId == nil && currentTemplateId == nil)
+            guard matchesTemplate else {
+                DraftStore.clear(.live)
+                initializeFreshWorkout()
+                return
+            }
             pendingResumeDraft = saved
             showResumePrompt = true
             return
@@ -3898,6 +3908,7 @@ struct LiveWorkoutView: View {
             return
         }
         let payload = LiveWorkoutDraft(
+            templateId: template?.id,
             workoutDate: workoutDate,
             usesManualTimes: usesManualTimes,
             manualStartTime: manualStartTime,
@@ -4751,16 +4762,6 @@ struct AddWorkoutView: View {
                 persistDraftIfNeeded()
             }
         }
-        .onChange(of: workoutDate) { _, newValue in
-            if Calendar.current.isDateInToday(newValue) {
-                isTimeConfirmed = true
-                return
-            }
-            usesManualTimes = true
-            showsTimeEditor = true
-            isTimeConfirmed = false
-            setDefaultManualTimes()
-        }
         .contentShape(Rectangle())
         .onTapGesture {
             dismissKeyboard()
@@ -4861,7 +4862,10 @@ struct AddWorkoutView: View {
         if let saved = DraftStore.load(.add, as: AddWorkoutDraft.self) {
             let matchesSession = saved.sessionId == session?.id
             let matchesNew = saved.sessionId == nil && session == nil
-            if matchesSession || matchesNew {
+            let currentTemplateId = template?.id
+            let matchesTemplate = saved.templateId == currentTemplateId
+                || (saved.templateId == nil && currentTemplateId == nil)
+            if (matchesSession || matchesNew) && matchesTemplate {
                 pendingResumeDraft = saved
                 showResumePrompt = true
                 return
@@ -4945,6 +4949,7 @@ struct AddWorkoutView: View {
         }
         let payload = AddWorkoutDraft(
             sessionId: session?.id,
+            templateId: template?.id,
             workoutDate: workoutDate,
             usesManualTimes: usesManualTimes,
             manualStartTime: manualStartTime,
