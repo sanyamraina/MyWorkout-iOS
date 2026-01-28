@@ -2411,9 +2411,14 @@ struct HomeView: View {
             }
 
             if store.templates.isEmpty {
-                Text("Create a template to reuse your go-to workouts.")
-                    .font(.custom("Avenir Next", size: DesignSystem.FontSize.body))
-                    .foregroundStyle(themedSecondaryText())
+                VStack(alignment: .leading, spacing: DesignSystem.Spacing.xs) {
+                    Text("Create a template to reuse your go-to workouts.")
+                        .font(.custom("Avenir Next", size: DesignSystem.FontSize.body))
+                        .foregroundStyle(themedSecondaryText())
+                }
+                .padding(DesignSystem.Spacing.xl)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .cardBackground(cornerRadius: DesignSystem.CornerRadius.xxl, opacity: 0, hasStroke: false)
             } else {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: DesignSystem.Spacing.md) {
@@ -2457,10 +2462,14 @@ struct HomeView: View {
 
             let recentExercises = recentWorkoutExercises(limit: 8)
             if recentExercises.isEmpty {
-                Text("No exercises yet. Add a workout to start your log.")
-                    .font(.custom("Avenir Next", size: DesignSystem.FontSize.body))
-                    .foregroundStyle(themedSecondaryText())
-                    .padding(.top, DesignSystem.Spacing.xs)
+                VStack(alignment: .leading, spacing: DesignSystem.Spacing.xs) {
+                    Text("No exercises yet. Add a workout to start your log.")
+                        .font(.custom("Avenir Next", size: DesignSystem.FontSize.body))
+                        .foregroundStyle(themedSecondaryText())
+                }
+                .padding(DesignSystem.Spacing.xl)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .cardBackground(cornerRadius: DesignSystem.CornerRadius.xxl, opacity: 0, hasStroke: false)
             } else {
                 ForEach(recentExercises, id: \.self) { name in
                     Button {
