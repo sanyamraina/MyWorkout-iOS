@@ -2118,31 +2118,26 @@ struct HomeView: View {
             )
             .ignoresSafeArea()
 
-            List {
-                header
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
-                    .listRowInsets(EdgeInsets(top: DesignSystem.Spacing.huge, leading: DesignSystem.Spacing.xxl, bottom: DesignSystem.Spacing.sm, trailing: DesignSystem.Spacing.xxl))
+            ScrollView {
+                LazyVStack(spacing: 0, pinnedViews: []) {
+                    header
+                        .padding(.top, DesignSystem.Spacing.huge)
+                        .padding(.horizontal, DesignSystem.Spacing.xxl)
+                        .padding(.bottom, DesignSystem.Spacing.sm)
 
-                stats
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
-                    .listRowInsets(EdgeInsets(top: 0, leading: DesignSystem.Spacing.xxl, bottom: DesignSystem.Spacing.xl, trailing: DesignSystem.Spacing.xxl))
+                    stats
+                        .padding(.horizontal, DesignSystem.Spacing.xxl)
+                        .padding(.bottom, DesignSystem.Spacing.xl)
 
-                templatesSection
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
-                    .listRowInsets(EdgeInsets(top: 0, leading: DesignSystem.Spacing.xxl, bottom: DesignSystem.Spacing.xl, trailing: DesignSystem.Spacing.xxl))
+                    templatesSection
+                        .padding(.horizontal, DesignSystem.Spacing.xxl)
+                        .padding(.bottom, DesignSystem.Spacing.xl)
 
-                exercisesSection
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
-                    .listRowInsets(EdgeInsets(top: 0, leading: DesignSystem.Spacing.xxl, bottom: DesignSystem.Spacing.xxxl, trailing: DesignSystem.Spacing.xxl))
-
+                    exercisesSection
+                        .padding(.horizontal, DesignSystem.Spacing.xxl)
+                        .padding(.bottom, DesignSystem.Spacing.xxxl)
+                }
             }
-            .listStyle(.plain)
-            .listRowSeparator(.hidden)
-            .scrollContentBackground(.hidden)
         }
         .safeAreaInset(edge: .bottom) {
             addButton
@@ -2164,6 +2159,7 @@ struct HomeView: View {
         }
         .sheet(item: $editingTemplate) { template in
             EditTemplateView(store: store, template: template)
+                .id(template.id)
         }
         .sheet(item: $templateSharePayload) { payload in
             TemplateShareSheet(
@@ -2173,6 +2169,7 @@ struct HomeView: View {
                     showTemplateShareNotice = true
                 }
             )
+            .id(payload.id)
         }
         .sheet(isPresented: $showTemplateScanner) {
             TemplateQRScanner(
@@ -2463,6 +2460,7 @@ struct HomeView: View {
                 Text("No exercises yet. Add a workout to start your log.")
                     .font(.custom("Avenir Next", size: DesignSystem.FontSize.body))
                     .foregroundStyle(themedSecondaryText())
+                    .padding(.top, DesignSystem.Spacing.xs)
             } else {
                 ForEach(recentExercises, id: \.self) { name in
                     Button {
@@ -8681,6 +8679,7 @@ struct TemplateCard: View {
                     )
             )
         }
+        .buttonStyle(.plain)
         .contextMenu {
             Button {
                 onShare()
