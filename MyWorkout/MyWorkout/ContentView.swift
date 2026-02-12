@@ -348,6 +348,30 @@ private func formattedWeight(_ kg: Double, unit: WeightUnit) -> String {
     return String(format: "%.1f %@", value, unit.label)
 }
 
+private func formattedTime(_ date: Date) -> String {
+    date.formatted(date: .omitted, time: .shortened)
+}
+
+private func sessionTimeRangeLabel(start: Date, end: Date) -> String {
+    if start == end {
+        return formattedTime(start)
+    }
+    return "\(formattedTime(start)) – \(formattedTime(end))"
+}
+
+private func relativeLabel(for date: Date) -> String {
+    if Calendar.current.isDateInToday(date) {
+        return "Today"
+    }
+    if Calendar.current.isDateInYesterday(date) {
+        return "Yesterday"
+    }
+    if Calendar.current.isDateInTomorrow(date) {
+        return "Tomorrow"
+    }
+    return date.formatted(date: .abbreviated, time: .omitted)
+}
+
 enum MuscleGroup: String, CaseIterable, Codable {
     case chest = "Chest"
     case back = "Back"
@@ -909,7 +933,7 @@ final class WorkoutStore: ObservableObject {
         templateUsage = loadTemplateUsage()
         customLibrary = loadCustomLibrary()
         exerciseLibrary = mergedLibrary(defaults: Self.defaultLibrary, custom: customLibrary)
-        load()
+        loadAsync()
     }
 
     private func normalizedTitleCase(_ value: String) -> String {
@@ -1476,9 +1500,17 @@ final class WorkoutStore: ObservableObject {
         return kg
     }
 
-    private func load() {
-        entries = loadEntries()
-        let needsEntryMigration = entries.isEmpty
+    private struct LoadedData {
+        let entries: [WorkoutExercise]
+        let templates: [WorkoutTemplate]
+        let exerciseTypeMap: [String: ExerciseType]
+        let exerciseNotes: [String: String]
+        let needsEntryMigration: Bool
+    }
+
+    private func loadSnapshot() -> LoadedData {
+        var loadedEntries = loadEntries()
+        let needsEntryMigration = loadedEntries.isEmpty
         if needsEntryMigration {
             let legacySessions = loadSessions()
             let legacyEntries = legacySessions.flatMap { session in
@@ -1495,19 +1527,39 @@ final class WorkoutStore: ObservableObject {
                     )
                 }
             }
-            entries = legacyEntries
+            loadedEntries = legacyEntries
         }
-        templates = loadTemplates()
-        exerciseTypeMap = loadExerciseTypes()
-        exerciseNotes = loadExerciseNotes()
-        hasLoaded = true
-        updateExerciseTypes(from: entries)
-        let templateExercises = templates.flatMap { $0.exercises }
-        updateExerciseTypes(from: templateExercises)
-        updateExerciseTypes(from: exerciseLibrary)
-        refreshSessions()
-        if needsEntryMigration {
-            saveEntries()
+        let loadedTemplates = loadTemplates()
+        let loadedExerciseTypeMap = loadExerciseTypes()
+        let loadedExerciseNotes = loadExerciseNotes()
+        return LoadedData(
+            entries: loadedEntries,
+            templates: loadedTemplates,
+            exerciseTypeMap: loadedExerciseTypeMap,
+            exerciseNotes: loadedExerciseNotes,
+            needsEntryMigration: needsEntryMigration
+        )
+    }
+
+    private func loadAsync() {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self else { return }
+            let snapshot = self.loadSnapshot()
+            DispatchQueue.main.async {
+                self.entries = snapshot.entries
+                self.templates = snapshot.templates
+                self.exerciseTypeMap = snapshot.exerciseTypeMap
+                self.exerciseNotes = snapshot.exerciseNotes
+                self.hasLoaded = true
+                self.updateExerciseTypes(from: self.entries)
+                let templateExercises = self.templates.flatMap { $0.exercises }
+                self.updateExerciseTypes(from: templateExercises)
+                self.updateExerciseTypes(from: self.exerciseLibrary)
+                self.refreshSessions()
+                if snapshot.needsEntryMigration {
+                    self.saveEntries()
+                }
+            }
         }
     }
 
@@ -2164,6 +2216,7 @@ struct HomeView: View {
         .sheet(item: $templateSharePayload) { payload in
             TemplateShareSheet(
                 code: payload.code,
+                templateName: payload.templateName,
                 onCopy: {
                     UIPasteboard.general.string = payload.code
                     showTemplateShareNotice = true
@@ -2431,7 +2484,10 @@ struct HomeView: View {
                                 onShare: {
                                     do {
                                         let code = try store.shareString(for: template)
-                                        templateSharePayload = TemplateShareSheetPayload(code: code)
+                                        templateSharePayload = TemplateShareSheetPayload(
+                                            code: code,
+                                            templateName: template.title
+                                        )
                                     } catch {
                                         templateImportErrorMessage = "Unable to share template."
                                         showTemplateImportError = true
@@ -2552,6 +2608,7 @@ struct HomeView: View {
 struct HistoryView: View {
     @ObservedObject var store: WorkoutStore
     @State private var editingSession: WorkoutSession?
+    @State private var templateSeed: TemplateSeed?
     @State private var path: [UUID] = []
 
     var body: some View {
@@ -2581,7 +2638,21 @@ struct HistoryView: View {
                                         sessionNumber: sessionNumbers[session.id] ?? 1,
                                         onEdit: { editingSession = session },
                                         onDelete: { store.removeSession(session) },
-                                        onSaveTemplate: { store.addTemplate(from: session) }
+                                        onSaveTemplate: {
+                                            let mergedExercises = session.mergedExercises()
+                                            let title = "Template \(store.templates.count + 1)"
+                                            let drafts = mergedExercises.map { exercise in
+                                                ExerciseDraft(
+                                                    name: exercise.name,
+                                                    type: exercise.type,
+                                                    weightUnit: store.defaultWeightUnit
+                                                )
+                                            }
+                                            let seedDrafts = drafts.isEmpty
+                                                ? [ExerciseDraft(weightUnit: store.defaultWeightUnit)]
+                                                : drafts
+                                            templateSeed = TemplateSeed(title: title, drafts: seedDrafts)
+                                        }
                                     )
                                 }
                                 .buttonStyle(.plain)
@@ -2642,6 +2713,9 @@ struct HistoryView: View {
         }
         .sheet(item: $editingSession) { session in
             AddWorkoutView(store: store, template: nil, session: session)
+        }
+        .sheet(item: $templateSeed) { seed in
+            AddTemplateView(store: store, seed: seed)
         }
     }
 
@@ -7538,7 +7612,6 @@ struct WorkoutSessionCard: View {
                     .font(.custom("Avenir Next", size: 12))
                     .foregroundStyle(themedSecondaryText())
             }
-
             HStack(spacing: 12) {
                 if totalSets > 0 {
                     TagView(text: "\(totalSets) sets")
@@ -7652,7 +7725,7 @@ struct SessionDetailView: View {
                             }
                     }
                 } header: {
-                    Text(session.date.formatted(date: .abbreviated, time: .omitted))
+                    Text("\(relativeLabel(for: session.date)) • \(sessionTimeRangeLabel(start: session.date, end: session.endDate))")
                         .font(.custom("Avenir Next", size: 28))
                         .fontWeight(.semibold)
                         .foregroundStyle(themedPrimaryText())
@@ -7707,6 +7780,11 @@ struct ExerciseDetailCard: View {
                     .foregroundStyle(themedPrimaryText())
                 Spacer()
                 Text(exercise.type.label)
+                    .font(.custom("Avenir Next", size: 12))
+                    .foregroundStyle(themedSecondaryText())
+            }
+            if let loggedAt = exercise.loggedAt {
+                Text("Time: \(formattedTime(loggedAt))")
                     .font(.custom("Avenir Next", size: 12))
                     .foregroundStyle(themedSecondaryText())
             }
@@ -8711,6 +8789,7 @@ struct TemplateCard: View {
 
 struct TemplateShareSheet: View {
     let code: String
+    let templateName: String
     let onCopy: () -> Void
     @Environment(\.dismiss) private var dismiss
 
@@ -8729,6 +8808,9 @@ struct TemplateShareSheet: View {
                         .font(.custom("Avenir Next", size: 26))
                         .fontWeight(.semibold)
                         .foregroundStyle(themeColor(.sand))
+                    Text(templateName)
+                        .font(.custom("Avenir Next", size: 16))
+                        .foregroundStyle(themeColor(.sand).opacity(0.7))
 
                     QRCodeView(text: code)
                         .frame(maxWidth: .infinity, alignment: .center)
@@ -8777,6 +8859,7 @@ struct TemplateShareSheet: View {
 struct TemplateShareSheetPayload: Identifiable {
     let id = UUID()
     let code: String
+    let templateName: String
 }
 
 struct QRCodeView: View {
@@ -9015,15 +9098,37 @@ struct QRScannerView: UIViewRepresentable {
     }
 }
 
+struct TemplateSeed: Identifiable {
+    let id: UUID
+    let title: String
+    let drafts: [ExerciseDraft]
+
+    init(id: UUID = UUID(), title: String, drafts: [ExerciseDraft]) {
+        self.id = id
+        self.title = title
+        self.drafts = drafts
+    }
+}
+
 struct AddTemplateView: View {
     @ObservedObject var store: WorkoutStore
+    let seed: TemplateSeed?
     @Environment(\.dismiss) private var dismiss
 
-    @State private var title = ""
-    @State private var drafts: [ExerciseDraft] = [ExerciseDraft()]
+    @State private var title: String
+    @State private var drafts: [ExerciseDraft]
     @State private var editMode: EditMode = .inactive
     @State private var isNameFocused = false
     @State private var isKeyboardVisible = false
+
+    init(store: WorkoutStore, seed: TemplateSeed? = nil) {
+        self.store = store
+        self.seed = seed
+        let initialDrafts = seed?.drafts ?? [ExerciseDraft(weightUnit: store.defaultWeightUnit)]
+        let safeDrafts = initialDrafts.isEmpty ? [ExerciseDraft(weightUnit: store.defaultWeightUnit)] : initialDrafts
+        _drafts = State(initialValue: safeDrafts)
+        _title = State(initialValue: seed?.title ?? "")
+    }
 
     private var validExercises: [TemplateExercise] {
         drafts.compactMap { draft in
