@@ -148,6 +148,7 @@ private func applySegmentedAppearance() {
 enum ExerciseType: String, Codable, CaseIterable {
     case weights
     case cardio
+    case isometric
 
     var label: String {
         switch self {
@@ -155,6 +156,8 @@ enum ExerciseType: String, Codable, CaseIterable {
             return "Weights"
         case .cardio:
             return "Cardio"
+        case .isometric:
+            return "Isometric"
         }
     }
 }
@@ -448,6 +451,8 @@ struct WorkoutExercise: Identifiable, Codable, Equatable {
     let sets: [WorkoutSet]
     let durationSeconds: Int?
     let calories: Int?
+    let isometricWeightKg: Double?
+    let isometricSets: [IsometricSet]
     let loggedAt: Date?
     let todaysNotes: String?
 
@@ -458,6 +463,8 @@ struct WorkoutExercise: Identifiable, Codable, Equatable {
         sets: [WorkoutSet],
         durationSeconds: Int? = nil,
         calories: Int? = nil,
+        isometricWeightKg: Double? = nil,
+        isometricSets: [IsometricSet] = [],
         loggedAt: Date? = nil,
         todaysNotes: String? = nil
     ) {
@@ -467,6 +474,8 @@ struct WorkoutExercise: Identifiable, Codable, Equatable {
         self.sets = sets
         self.durationSeconds = durationSeconds
         self.calories = calories
+        self.isometricWeightKg = isometricWeightKg
+        self.isometricSets = isometricSets
         self.loggedAt = loggedAt
         self.todaysNotes = todaysNotes
     }
@@ -494,6 +503,12 @@ struct WorkoutExercise: Identifiable, Codable, Equatable {
             self.durationSeconds = nil
         }
         calories = try container.decodeIfPresent(Int.self, forKey: .calories)
+        isometricWeightKg = try container.decodeIfPresent(Double.self, forKey: .isometricWeightKg)
+        if let decodedSets = try container.decodeIfPresent([IsometricSet].self, forKey: .isometricSets) {
+            isometricSets = decodedSets
+        } else {
+            isometricSets = []
+        }
         loggedAt = try container.decodeIfPresent(Date.self, forKey: .loggedAt)
         todaysNotes = try container.decodeIfPresent(String.self, forKey: .todaysNotes)
     }
@@ -506,6 +521,8 @@ struct WorkoutExercise: Identifiable, Codable, Equatable {
         try container.encode(sets, forKey: .sets)
         try container.encodeIfPresent(durationSeconds, forKey: .durationSeconds)
         try container.encodeIfPresent(calories, forKey: .calories)
+        try container.encodeIfPresent(isometricWeightKg, forKey: .isometricWeightKg)
+        try container.encode(isometricSets, forKey: .isometricSets)
         try container.encodeIfPresent(loggedAt, forKey: .loggedAt)
         try container.encodeIfPresent(todaysNotes, forKey: .todaysNotes)
     }
@@ -520,9 +537,17 @@ struct WorkoutExercise: Identifiable, Codable, Equatable {
         case durationMinutes
         case durationSeconds
         case calories
+        case isometricWeightKg
+        case isometricSets
         case loggedAt
         case todaysNotes
     }
+}
+
+struct IsometricSet: Identifiable, Codable, Equatable {
+    let id: UUID
+    let durationSeconds: Int
+    let weightKg: Double
 }
 
 struct WorkoutSetSegment: Identifiable, Codable, Equatable {
@@ -732,6 +757,8 @@ extension WorkoutSession {
                         sets: combinedSets,
                         durationSeconds: nil,
                         calories: nil,
+                        isometricWeightKg: nil,
+                        isometricSets: [],
                         loggedAt: mergedLoggedAt,
                         todaysNotes: mergedEntryNote(existing.todaysNotes, exercise.todaysNotes)
                     )
@@ -750,6 +777,25 @@ extension WorkoutSession {
                         sets: [],
                         durationSeconds: totalSeconds > 0 ? totalSeconds : nil,
                         calories: totalCalories > 0 ? totalCalories : nil,
+                        isometricWeightKg: nil,
+                        isometricSets: [],
+                        loggedAt: mergedLoggedAt,
+                        todaysNotes: mergedEntryNote(existing.todaysNotes, exercise.todaysNotes)
+                    )
+                case .isometric:
+                    let combinedSets = existing.isometricSets + exercise.isometricSets
+                    let totalSeconds = combinedSets.reduce(0) { $0 + $1.durationSeconds }
+                    let maxWeight = combinedSets.map(\.weightKg).max() ?? 0
+                    let mergedLoggedAt = [existing.loggedAt, exercise.loggedAt].compactMap { $0 }.min()
+                    mergedByKey[key] = WorkoutExercise(
+                        id: existing.id,
+                        name: existing.name,
+                        type: existing.type,
+                        sets: [],
+                        durationSeconds: totalSeconds > 0 ? totalSeconds : nil,
+                        calories: nil,
+                        isometricWeightKg: maxWeight > 0 ? maxWeight : nil,
+                        isometricSets: combinedSets,
                         loggedAt: mergedLoggedAt,
                         todaysNotes: mergedEntryNote(existing.todaysNotes, exercise.todaysNotes)
                     )
@@ -773,6 +819,17 @@ struct WorkoutTemplate: Identifiable, Codable, Equatable {
 struct TemplateSharePayload: Codable {
     let version: Int
     let template: WorkoutTemplate
+}
+
+struct TemplateShareLiteExercise: Codable {
+    let name: String
+    let type: ExerciseType
+}
+
+struct TemplateShareLitePayload: Codable {
+    let version: Int
+    let title: String
+    let exercises: [TemplateShareLiteExercise]
 }
 
 struct LibraryExercise: Identifiable, Codable, Equatable {
@@ -901,6 +958,7 @@ final class WorkoutStore: ObservableObject {
     @Published private(set) var exerciseLibrary: [LibraryExercise] = []
     private var customLibrary: [LibraryExercise] = []
     private var hasLoaded = false
+    @Published var ioErrorMessage: String?
     @Published private var exerciseTypeMap: [String: ExerciseType] = [:]
     @Published private var exerciseNotes: [String: String] = [:]
     @Published private var templateUsage: [String: Int] = [:]
@@ -946,6 +1004,17 @@ final class WorkoutStore: ObservableObject {
         normalizedTitleCase(name)
     }
 
+    private func reportIOError(_ message: String) {
+        DispatchQueue.main.async {
+            self.ioErrorMessage = message
+        }
+    }
+
+    private func reportLoadErrorIfNeeded(_ message: String, url: URL) {
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        reportIOError(message)
+    }
+
 
 
     func addSession(date: Date, exercises: [WorkoutExercise]) {
@@ -957,6 +1026,8 @@ final class WorkoutStore: ObservableObject {
                 sets: exercise.sets,
                 durationSeconds: exercise.durationSeconds,
                 calories: exercise.calories,
+                isometricWeightKg: exercise.isometricWeightKg,
+                isometricSets: exercise.isometricSets,
                 loggedAt: exercise.loggedAt ?? date,
                 todaysNotes: exercise.todaysNotes
             )
@@ -991,6 +1062,8 @@ final class WorkoutStore: ObservableObject {
                         sets: combinedSets,
                         durationSeconds: nil,
                         calories: nil,
+                        isometricWeightKg: nil,
+                        isometricSets: [],
                         loggedAt: mergedLoggedAt(current: current, incoming: exercise),
                         todaysNotes: mergedTodaysNotes(current: current, incoming: exercise)
                     )
@@ -1008,6 +1081,24 @@ final class WorkoutStore: ObservableObject {
                         sets: [],
                         durationSeconds: totalSeconds > 0 ? totalSeconds : nil,
                         calories: totalCalories > 0 ? totalCalories : nil,
+                        isometricWeightKg: nil,
+                        isometricSets: [],
+                        loggedAt: mergedLoggedAt(current: current, incoming: exercise),
+                        todaysNotes: mergedTodaysNotes(current: current, incoming: exercise)
+                    )
+                case .isometric:
+                    let combinedSets = current.isometricSets + exercise.isometricSets
+                    let totalSeconds = combinedSets.reduce(0) { $0 + $1.durationSeconds }
+                    let maxWeight = combinedSets.map(\.weightKg).max() ?? 0
+                    merged[idx] = WorkoutExercise(
+                        id: current.id,
+                        name: current.name,
+                        type: current.type,
+                        sets: [],
+                        durationSeconds: totalSeconds > 0 ? totalSeconds : nil,
+                        calories: nil,
+                        isometricWeightKg: maxWeight > 0 ? maxWeight : nil,
+                        isometricSets: combinedSets,
                         loggedAt: mergedLoggedAt(current: current, incoming: exercise),
                         todaysNotes: mergedTodaysNotes(current: current, incoming: exercise)
                     )
@@ -1165,6 +1256,8 @@ final class WorkoutStore: ObservableObject {
             sets: exercise.sets,
             durationSeconds: exercise.durationSeconds,
             calories: exercise.calories,
+            isometricWeightKg: exercise.isometricWeightKg,
+            isometricSets: exercise.isometricSets,
             loggedAt: loggedAt,
             todaysNotes: exercise.todaysNotes
         )
@@ -1181,6 +1274,8 @@ final class WorkoutStore: ObservableObject {
                 sets: exercise.sets,
                 durationSeconds: exercise.durationSeconds,
                 calories: exercise.calories,
+                isometricWeightKg: exercise.isometricWeightKg,
+                isometricSets: exercise.isometricSets,
                 loggedAt: exercise.loggedAt ?? date,
                 todaysNotes: exercise.todaysNotes
             )
@@ -1236,7 +1331,10 @@ final class WorkoutStore: ObservableObject {
     }
 
     func shareString(for template: WorkoutTemplate) throws -> String {
-        let payload = TemplateSharePayload(version: 1, template: template)
+        let liteExercises = template.exercises.map {
+            TemplateShareLiteExercise(name: $0.name, type: $0.type)
+        }
+        let payload = TemplateShareLitePayload(version: 2, title: template.title, exercises: liteExercises)
         let data = try JSONEncoder().encode(payload)
         return data.base64EncodedString()
     }
@@ -1245,6 +1343,13 @@ final class WorkoutStore: ObservableObject {
         let cleaned = shareString.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let data = Data(base64Encoded: cleaned) else {
             throw TemplateShareError.invalidPayload
+        }
+        if let payload = try? JSONDecoder().decode(TemplateShareLitePayload.self, from: data) {
+            let exercises = payload.exercises.map {
+                TemplateExercise(id: UUID(), name: $0.name, type: $0.type, weightKg: nil, sets: nil, repsPerSet: nil)
+            }
+            addTemplate(title: payload.title, exercises: exercises)
+            return
         }
         let payload = try JSONDecoder().decode(TemplateSharePayload.self, from: data)
         let exercises = payload.template.exercises.map {
@@ -1352,12 +1457,38 @@ final class WorkoutStore: ObservableObject {
                             exerciseNote: exerciseNote(for: latest.exercise.name)
                         )
                     }
+                case .isometric:
+                    if latest.exercise.type == .isometric {
+                        let latestSets = latest.exercise.isometricSets
+                        let setDrafts = latestSets.isEmpty
+                            ? [IsometricSetDraft(durationPlaceholder: formattedDurationValue(latest.exercise.durationSeconds))]
+                            : latestSets.map { set in
+                                let weightPlaceholder = set.weightKg > 0
+                                    ? String(format: "%.1f", weightValue(set.weightKg, unit: defaultWeightUnit))
+                                    : "0"
+                                return IsometricSetDraft(
+                                    duration: "",
+                                    weight: "",
+                                    durationPlaceholder: formattedDurationValue(set.durationSeconds),
+                                    weightPlaceholder: weightPlaceholder
+                                )
+                            }
+                        return ExerciseDraft(
+                            name: trimmedName,
+                            type: .isometric,
+                            sets: [],
+                            isometricSets: setDrafts,
+                            weightUnit: defaultWeightUnit,
+                            exerciseNote: exerciseNote(for: trimmedName)
+                        )
+                    }
                 }
             }
             return ExerciseDraft(
                 name: trimmedName,
                 type: exercise.type,
                 sets: exercise.type == .weights ? [WorkoutSetDraft()] : [],
+                isometricSets: exercise.type == .isometric ? [IsometricSetDraft()] : [IsometricSetDraft()],
                 weightUnit: defaultWeightUnit,
                 exerciseNote: exerciseNote(for: trimmedName)
             )
@@ -1433,6 +1564,8 @@ final class WorkoutStore: ObservableObject {
                         sets: exercise.sets,
                         durationSeconds: exercise.durationSeconds,
                         calories: exercise.calories,
+                        isometricWeightKg: exercise.isometricWeightKg,
+                        isometricSets: exercise.isometricSets,
                         loggedAt: exercise.loggedAt ?? session.date,
                         todaysNotes: exercise.todaysNotes
                     )
@@ -1465,15 +1598,18 @@ final class WorkoutStore: ObservableObject {
         entries = []
         sessions = []
         templates = []
+        templateUsage = [:]
         exerciseTypeMap = [:]
         exerciseNotes = [:]
         customLibrary = []
         exerciseLibrary = Self.defaultLibrary
         saveEntries()
         saveTemplates()
+        saveTemplateUsage()
         saveExerciseTypes()
         saveExerciseNotes()
         saveCustomLibrary()
+        UserDefaults.standard.removeObject(forKey: "templateUsageCounts")
 
         let urls = [
             sessionsFileURL(),
@@ -1522,6 +1658,8 @@ final class WorkoutStore: ObservableObject {
                         sets: exercise.sets,
                         durationSeconds: exercise.durationSeconds,
                         calories: exercise.calories,
+                        isometricWeightKg: exercise.isometricWeightKg,
+                        isometricSets: exercise.isometricSets,
                         loggedAt: exercise.loggedAt ?? session.date,
                         todaysNotes: exercise.todaysNotes
                     )
@@ -1694,6 +1832,7 @@ final class WorkoutStore: ObservableObject {
             let data = try Data(contentsOf: exerciseTypesFileURL())
             return try JSONDecoder().decode([String: ExerciseType].self, from: data)
         } catch {
+            reportLoadErrorIfNeeded("Failed to load exercise types.", url: exerciseTypesFileURL())
             return [:]
         }
     }
@@ -1703,6 +1842,7 @@ final class WorkoutStore: ObservableObject {
             let data = try Data(contentsOf: exerciseNotesFileURL())
             return try JSONDecoder().decode([String: String].self, from: data)
         } catch {
+            reportLoadErrorIfNeeded("Failed to load exercise notes.", url: exerciseNotesFileURL())
             return [:]
         }
     }
@@ -1719,7 +1859,7 @@ final class WorkoutStore: ObservableObject {
             )
             try data.write(to: url, options: [.atomic])
         } catch {
-            // Ignore write failures; user can continue without persistence.
+            reportIOError("Failed to save exercise types.")
         }
     }
 
@@ -1732,7 +1872,7 @@ final class WorkoutStore: ObservableObject {
                 .createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: nil)
             try data.write(to: url, options: [.atomic])
         } catch {
-            // Ignore write failures; user can continue without persistence.
+            reportIOError("Failed to save exercise notes.")
         }
     }
 
@@ -1867,7 +2007,6 @@ final class WorkoutStore: ObservableObject {
         LibraryExercise(id: UUID(), name: "Squat (Front)", group: .legs, type: .weights),
         LibraryExercise(id: UUID(), name: "Squat (Smith)", group: .legs, type: .weights),
         LibraryExercise(id: UUID(), name: "Leg Press", group: .legs, type: .weights),
-        LibraryExercise(id: UUID(), name: "Deadlift (Romanian)", group: .legs, type: .weights),
         LibraryExercise(id: UUID(), name: "Deadlift (Sumo)", group: .legs, type: .weights),
         LibraryExercise(id: UUID(), name: "Lunge (Walking)", group: .legs, type: .weights),
         LibraryExercise(id: UUID(), name: "Lunge (Reverse)", group: .legs, type: .weights),
@@ -1875,9 +2014,14 @@ final class WorkoutStore: ObservableObject {
         LibraryExercise(id: UUID(), name: "Leg Extensions", group: .legs, type: .weights),
         LibraryExercise(id: UUID(), name: "Leg Curls", group: .legs, type: .weights),
         LibraryExercise(id: UUID(), name: "Calf Raises", group: .legs, type: .weights),
-        LibraryExercise(id: UUID(), name: "Plank (Standard)", group: .core, type: .weights),
-        LibraryExercise(id: UUID(), name: "Plank (Side)", group: .core, type: .weights),
-        LibraryExercise(id: UUID(), name: "Plank (Weighted)", group: .core, type: .weights),
+        LibraryExercise(id: UUID(), name: "Plank (Standard)", group: .core, type: .isometric),
+        LibraryExercise(id: UUID(), name: "Plank (Side)", group: .core, type: .isometric),
+        LibraryExercise(id: UUID(), name: "Plank (Weighted)", group: .core, type: .isometric),
+        LibraryExercise(id: UUID(), name: "Farmer Carry", group: .core, type: .isometric),
+        LibraryExercise(id: UUID(), name: "Suitcase Carry", group: .core, type: .isometric),
+        LibraryExercise(id: UUID(), name: "Overhead Carry", group: .core, type: .isometric),
+        LibraryExercise(id: UUID(), name: "Front Rack Carry", group: .core, type: .isometric),
+        LibraryExercise(id: UUID(), name: "Waiter Carry", group: .core, type: .isometric),
         LibraryExercise(id: UUID(), name: "Crunch (Cable)", group: .core, type: .weights),
         LibraryExercise(id: UUID(), name: "Crunch (Machine)", group: .core, type: .weights),
         LibraryExercise(id: UUID(), name: "Hanging Leg Raises", group: .core, type: .weights),
@@ -1935,12 +2079,14 @@ final class WorkoutStore: ObservableObject {
                                 },
                                 durationSeconds: nil,
                                 calories: nil,
+                                isometricWeightKg: nil,
                                 loggedAt: entry.date
                             )
                         ]
                     )
                 }
             } catch {
+                reportLoadErrorIfNeeded("Failed to load sessions.", url: sessionsFileURL())
                 return []
             }
         }
@@ -1951,6 +2097,7 @@ final class WorkoutStore: ObservableObject {
             let data = try Data(contentsOf: entriesFileURL())
             return try JSONDecoder().decode([WorkoutExercise].self, from: data)
         } catch {
+            reportLoadErrorIfNeeded("Failed to load entries.", url: entriesFileURL())
             return []
         }
     }
@@ -1985,6 +2132,7 @@ final class WorkoutStore: ObservableObject {
                     )
                 }
             } catch {
+                reportLoadErrorIfNeeded("Failed to load templates.", url: templatesFileURL())
                 return []
             }
         }
@@ -2002,7 +2150,7 @@ final class WorkoutStore: ObservableObject {
             )
             try data.write(to: url, options: [.atomic])
         } catch {
-            // Ignore write failures; user can continue without persistence.
+            reportIOError("Failed to save entries.")
         }
     }
 
@@ -2011,6 +2159,7 @@ final class WorkoutStore: ObservableObject {
             let data = try Data(contentsOf: exerciseLibraryFileURL())
             return try JSONDecoder().decode([LibraryExercise].self, from: data)
         } catch {
+            reportLoadErrorIfNeeded("Failed to load custom exercises.", url: exerciseLibraryFileURL())
             return []
         }
     }
@@ -2027,7 +2176,7 @@ final class WorkoutStore: ObservableObject {
             )
             try data.write(to: url, options: [.atomic])
         } catch {
-            // Ignore write failures; user can continue without persistence.
+            reportIOError("Failed to save custom exercises.")
         }
     }
 
@@ -2043,7 +2192,7 @@ final class WorkoutStore: ObservableObject {
             )
             try data.write(to: url, options: [.atomic])
         } catch {
-            // Ignore write failures; user can continue without persistence.
+            reportIOError("Failed to save templates.")
         }
     }
 
@@ -2138,6 +2287,39 @@ struct ContentView: View {
         .onChange(of: themeStore.selectedTheme) { _, _ in
             applySegmentedAppearance()
         }
+        .overlay(alignment: .top) {
+            if let message = store.ioErrorMessage {
+                HStack(spacing: 12) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(themeColor(.sand))
+                    Text(message)
+                        .font(.custom("Avenir Next", size: 13))
+                        .foregroundStyle(themedPrimaryText())
+                    Spacer()
+                    Button {
+                        store.ioErrorMessage = nil
+                    } label: {
+                        Image(systemName: "xmark")
+                            .foregroundStyle(themedSecondaryText())
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(themeColor(.card))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(themeColor(.sand).opacity(0.12), lineWidth: 1)
+                        )
+                )
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+                .transition(.move(edge: .top).combined(with: .opacity))
+                .zIndex(10)
+            }
+        }
     }
 }
 
@@ -2212,6 +2394,13 @@ struct HomeView: View {
         .sheet(item: $editingTemplate) { template in
             EditTemplateView(store: store, template: template)
                 .id(template.id)
+                .presentationBackground(
+                    LinearGradient(
+                        colors: [themeColor(.night), themeColor(.coal)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
         }
         .sheet(item: $templateSharePayload) { payload in
             TemplateShareSheet(
@@ -2610,6 +2799,9 @@ struct HistoryView: View {
     @State private var editingSession: WorkoutSession?
     @State private var templateSeed: TemplateSeed?
     @State private var path: [UUID] = []
+    @State private var searchText = ""
+    @State private var isDateFilterOn = false
+    @State private var filterDate = Date()
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -2623,13 +2815,19 @@ struct HistoryView: View {
                 
                 List {
                     Section {
-                        if store.sessions.isEmpty {
+                        historyFilters
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
+                            .listRowInsets(EdgeInsets(top: 12, leading: 20, bottom: 8, trailing: 20))
+                    }
+                    Section {
+                        if filteredSessions.isEmpty {
                             EmptyStateView()
                                 .listRowBackground(Color.clear)
                                 .listRowSeparator(.hidden)
                                 .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 12, trailing: 20))
                         } else {
-                            ForEach(store.sessions) { session in
+                            ForEach(filteredSessions) { session in
                                 Button {
                                     path.append(session.id)
                                 } label: {
@@ -2690,6 +2888,7 @@ struct HistoryView: View {
                 .listStyle(.plain)
                 .listRowSeparator(.hidden)
                 .scrollContentBackground(.hidden)
+                .searchable(text: $searchText, prompt: "Search exercise or date")
             }
             .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(for: UUID.self) { id in
@@ -2716,6 +2915,54 @@ struct HistoryView: View {
         }
         .sheet(item: $templateSeed) { seed in
             AddTemplateView(store: store, seed: seed)
+        }
+    }
+
+    private var historyFilters: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Toggle(isOn: $isDateFilterOn) {
+                Text("Filter by date")
+                    .font(.custom("Avenir Next", size: 14))
+                    .foregroundStyle(themedPrimaryText())
+            }
+            .tint(themedAccent())
+
+            if isDateFilterOn {
+                DatePicker(
+                    "Date",
+                    selection: $filterDate,
+                    displayedComponents: [.date]
+                )
+                .datePickerStyle(.compact)
+                .tint(themedAccent())
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 14)
+                .fill(themeColor(.card).opacity(0.8))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14)
+                        .stroke(themeColor(.sand).opacity(0.08), lineWidth: 1)
+                )
+        )
+    }
+
+    private var filteredSessions: [WorkoutSession] {
+        let trimmedQuery = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let dateFiltered = isDateFilterOn
+            ? store.sessions.filter { Calendar.current.isDate($0.date, inSameDayAs: filterDate) }
+            : store.sessions
+        guard !trimmedQuery.isEmpty else { return dateFiltered }
+
+        return dateFiltered.filter { session in
+            let exerciseMatch = session.mergedExercises().contains { exercise in
+                exercise.name.lowercased().contains(trimmedQuery)
+            }
+            if exerciseMatch { return true }
+            let dateLabel = relativeLabel(for: session.date).lowercased()
+            let dateText = session.date.formatted(date: .abbreviated, time: .omitted).lowercased()
+            return dateLabel.contains(trimmedQuery) || dateText.contains(trimmedQuery)
         }
     }
 
@@ -2747,6 +2994,10 @@ struct SettingsView: View {
     @State private var sessionWindowSelection: SessionMergeWindowOption = .threeHours
     @State private var pendingSessionWindow: SessionMergeWindowOption?
     @State private var isSettingUp = true
+    @State private var showBackupToast = false
+    @State private var backupToastMessage = ""
+    @AppStorage("lastBackupTimestamp") private var lastBackupTimestamp: Double = 0
+    @State private var isTransferInProgress = false
 
     var body: some View {
         ZStack {
@@ -2772,13 +3023,31 @@ struct SettingsView: View {
                 .padding(.horizontal, 22)
                 .padding(.vertical, 24)
             }
+            .allowsHitTesting(!isTransferInProgress)
         }
         .fileExporter(
             isPresented: $isExporting,
             document: exportDocument,
             contentType: .json,
             defaultFilename: "myworkout-backup"
-        ) { _ in }
+        ) { result in
+            switch result {
+            case .success:
+                lastBackupTimestamp = Date().timeIntervalSince1970
+                backupToastMessage = "Backup exported."
+                showBackupToast = true
+                isTransferInProgress = false
+            case .failure(let error):
+                importErrorMessage = error.localizedDescription
+                showImportError = true
+                isTransferInProgress = false
+            }
+        }
+        .onChange(of: isExporting) { _, newValue in
+            if !newValue && isTransferInProgress {
+                isTransferInProgress = false
+            }
+        }
         .fileImporter(isPresented: $isImporting, allowedContentTypes: [.json]) { result in
             switch result {
             case .success(let url):
@@ -2786,6 +3055,12 @@ struct SettingsView: View {
             case .failure(let error):
                 importErrorMessage = error.localizedDescription
                 showImportError = true
+                isTransferInProgress = false
+            }
+        }
+        .onChange(of: isImporting) { _, newValue in
+            if !newValue && isTransferInProgress {
+                isTransferInProgress = false
             }
         }
         .alert("Import Failed", isPresented: $showImportError) {
@@ -2815,6 +3090,62 @@ struct SettingsView: View {
             }
         } message: {
             Text("Changing the session window can regroup past workouts. Rebuild history to apply the new window?")
+        }
+        .overlay(alignment: .top) {
+            if showBackupToast {
+                HStack(spacing: 12) {
+                    Image(systemName: "checkmark.seal.fill")
+                        .foregroundStyle(themeColor(.sand))
+                    Text(backupToastMessage)
+                        .font(.custom("Avenir Next", size: 13))
+                        .foregroundStyle(themedPrimaryText())
+                    Spacer()
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(themeColor(.card))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(themeColor(.sand).opacity(0.12), lineWidth: 1)
+                        )
+                )
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+                .transition(.move(edge: .top).combined(with: .opacity))
+                .zIndex(10)
+                .onAppear {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            showBackupToast = false
+                        }
+                    }
+                }
+            }
+        }
+        .overlay {
+            if isTransferInProgress {
+                ZStack {
+                    Color.black.opacity(0.35)
+                        .ignoresSafeArea()
+
+                    VStack(spacing: 10) {
+                        ProgressView()
+                            .tint(themeColor(.sand))
+                        Text("Working…")
+                            .font(.custom("Avenir Next", size: 14))
+                            .foregroundStyle(themedPrimaryText())
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 16)
+                    .background(
+                        RoundedRectangle(cornerRadius: 16)
+                            .fill(themeColor(.card))
+                    )
+                }
+                .transition(.opacity)
+            }
         }
         .onAppear {
             sessionWindowSelection = store.sessionMergeWindowOption
@@ -2939,20 +3270,29 @@ struct SettingsView: View {
             Text("Data")
                 .font(.custom("Avenir Next", size: DesignSystem.FontSize.body))
                 .foregroundStyle(themedSecondaryText())
+            if lastBackupTimestamp > 0 {
+                Text("Last backup: \(formattedBackupDate(lastBackupTimestamp))")
+                    .font(.custom("Avenir Next", size: DesignSystem.FontSize.caption))
+                    .foregroundStyle(themedSecondaryText())
+                    .padding(.top, 2)
+            }
 
             Button {
                 do {
                     exportDocument = BackupDocument(data: try store.exportBackupData())
+                    isTransferInProgress = true
                     isExporting = true
                 } catch {
                     importErrorMessage = error.localizedDescription
                     showImportError = true
+                    isTransferInProgress = false
                 }
             } label: {
                 settingsRow(title: "Export Backup", systemImage: "square.and.arrow.up")
             }
 
             Button {
+                isTransferInProgress = true
                 isImporting = true
             } label: {
                 settingsRow(title: "Import Backup", systemImage: "square.and.arrow.down")
@@ -3001,6 +3341,11 @@ struct SettingsView: View {
         return "\(version) (\(build))"
     }
 
+    private func formattedBackupDate(_ timestamp: Double) -> String {
+        let date = Date(timeIntervalSince1970: timestamp)
+        return date.formatted(date: .abbreviated, time: .shortened)
+    }
+
     private func settingsRow(title: String, systemImage: String, isDestructive: Bool = false) -> some View {
         HStack {
             Image(systemName: systemImage)
@@ -3025,9 +3370,14 @@ struct SettingsView: View {
         do {
             let data = try Data(contentsOf: url)
             try store.importBackupData(data)
+            lastBackupTimestamp = Date().timeIntervalSince1970
+            backupToastMessage = "Backup imported."
+            showBackupToast = true
+            isTransferInProgress = false
         } catch {
             importErrorMessage = error.localizedDescription
             showImportError = true
+            isTransferInProgress = false
         }
     }
 }
@@ -3627,6 +3977,20 @@ struct ExerciseHistoryCard: View {
                 tags.append("\(calories) cal")
             }
             return tags.isEmpty ? ["Cardio"] : tags
+        case .isometric:
+            let setCount = exercise.isometricSets.count
+            let totalSeconds = exercise.isometricSets.reduce(0) { $0 + $1.durationSeconds }
+            let maxWeight = exercise.isometricSets.map(\.weightKg).max() ?? 0
+            var tags = ["\(setCount) sets"]
+            if totalSeconds > 0 {
+                tags.append(durationLabel(totalSeconds))
+            }
+            if maxWeight > 0 {
+                tags.append(formattedWeight(maxWeight, unit: weightUnit))
+            } else {
+                tags.append("Bodyweight")
+            }
+            return tags
         }
     }
 }
@@ -3636,6 +4000,7 @@ struct ExerciseDraft: Identifiable, Equatable, Codable {
     var name: String
     var type: ExerciseType
     var sets: [WorkoutSetDraft]
+    var isometricSets: [IsometricSetDraft]
     var weightUnit: WeightUnit
     var durationMinutes: String
     var calories: String
@@ -3655,6 +4020,7 @@ struct ExerciseDraft: Identifiable, Equatable, Codable {
         name: String = "",
         type: ExerciseType = .weights,
         sets: [WorkoutSetDraft] = [WorkoutSetDraft()],
+        isometricSets: [IsometricSetDraft] = [IsometricSetDraft()],
         weightUnit: WeightUnit = .kg,
         durationMinutes: String = "",
         calories: String = "",
@@ -3673,6 +4039,7 @@ struct ExerciseDraft: Identifiable, Equatable, Codable {
         self.name = name
         self.type = type
         self.sets = sets
+        self.isometricSets = isometricSets
         self.weightUnit = weightUnit
         self.durationMinutes = durationMinutes
         self.calories = calories
@@ -3687,7 +4054,92 @@ struct ExerciseDraft: Identifiable, Equatable, Codable {
         self.isNameLocked = isNameLocked
         self.isTypeLocked = isTypeLocked
     }
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        name = try container.decodeIfPresent(String.self, forKey: .name) ?? ""
+        type = try container.decodeIfPresent(ExerciseType.self, forKey: .type) ?? .weights
+        sets = try container.decodeIfPresent([WorkoutSetDraft].self, forKey: .sets) ?? [WorkoutSetDraft()]
+        isometricSets = try container.decodeIfPresent([IsometricSetDraft].self, forKey: .isometricSets) ?? [IsometricSetDraft()]
+        weightUnit = try container.decodeIfPresent(WeightUnit.self, forKey: .weightUnit) ?? .kg
+        durationMinutes = try container.decodeIfPresent(String.self, forKey: .durationMinutes) ?? ""
+        calories = try container.decodeIfPresent(String.self, forKey: .calories) ?? ""
+        durationPlaceholder = try container.decodeIfPresent(String.self, forKey: .durationPlaceholder) ?? ""
+        caloriesPlaceholder = try container.decodeIfPresent(String.self, forKey: .caloriesPlaceholder) ?? ""
+        exerciseNote = try container.decodeIfPresent(String.self, forKey: .exerciseNote) ?? ""
+        isExerciseNoteExpanded = try container.decodeIfPresent(Bool.self, forKey: .isExerciseNoteExpanded) ?? false
+        todaysNotes = try container.decodeIfPresent(String.self, forKey: .todaysNotes) ?? ""
+        isTodaysNotesExpanded = try container.decodeIfPresent(Bool.self, forKey: .isTodaysNotesExpanded) ?? false
+        entryId = try container.decodeIfPresent(UUID.self, forKey: .entryId)
+        loggedAt = try container.decodeIfPresent(Date.self, forKey: .loggedAt)
+        isNameLocked = try container.decodeIfPresent(Bool.self, forKey: .isNameLocked) ?? false
+        isTypeLocked = try container.decodeIfPresent(Bool.self, forKey: .isTypeLocked) ?? false
+    }
 
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(name, forKey: .name)
+        try container.encode(type, forKey: .type)
+        try container.encode(sets, forKey: .sets)
+        try container.encode(isometricSets, forKey: .isometricSets)
+        try container.encode(weightUnit, forKey: .weightUnit)
+        try container.encode(durationMinutes, forKey: .durationMinutes)
+        try container.encode(calories, forKey: .calories)
+        try container.encode(durationPlaceholder, forKey: .durationPlaceholder)
+        try container.encode(caloriesPlaceholder, forKey: .caloriesPlaceholder)
+        try container.encode(exerciseNote, forKey: .exerciseNote)
+        try container.encode(isExerciseNoteExpanded, forKey: .isExerciseNoteExpanded)
+        try container.encode(todaysNotes, forKey: .todaysNotes)
+        try container.encode(isTodaysNotesExpanded, forKey: .isTodaysNotesExpanded)
+        try container.encodeIfPresent(entryId, forKey: .entryId)
+        try container.encodeIfPresent(loggedAt, forKey: .loggedAt)
+        try container.encode(isNameLocked, forKey: .isNameLocked)
+        try container.encode(isTypeLocked, forKey: .isTypeLocked)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case type
+        case sets
+        case isometricSets
+        case weightUnit
+        case durationMinutes
+        case calories
+        case durationPlaceholder
+        case caloriesPlaceholder
+        case exerciseNote
+        case isExerciseNoteExpanded
+        case todaysNotes
+        case isTodaysNotesExpanded
+        case entryId
+        case loggedAt
+        case isNameLocked
+        case isTypeLocked
+    }
+}
+
+struct IsometricSetDraft: Identifiable, Equatable, Codable {
+    let id: UUID
+    var duration: String
+    var weight: String
+    var durationPlaceholder: String
+    var weightPlaceholder: String
+
+    init(
+        id: UUID = UUID(),
+        duration: String = "",
+        weight: String = "",
+        durationPlaceholder: String = "",
+        weightPlaceholder: String = ""
+    ) {
+        self.id = id
+        self.duration = duration
+        self.weight = weight
+        self.durationPlaceholder = durationPlaceholder
+        self.weightPlaceholder = weightPlaceholder
+    }
 }
 
 struct WorkoutSetSegmentDraft: Identifiable, Equatable, Codable {
@@ -3747,6 +4199,12 @@ private extension ExerciseDraft {
         }
         if !todaysNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return true
+        }
+        for set in isometricSets {
+            if !set.duration.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                !set.weight.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return true
+            }
         }
         for set in sets {
             for segment in set.segments {
@@ -4286,6 +4744,8 @@ struct LiveWorkoutView: View {
                     sets: exercise.sets,
                     durationSeconds: exercise.durationSeconds,
                     calories: exercise.calories,
+                    isometricWeightKg: exercise.isometricWeightKg,
+                    isometricSets: exercise.isometricSets,
                     loggedAt: times[index],
                     todaysNotes: exercise.todaysNotes
                 )
@@ -4301,6 +4761,8 @@ struct LiveWorkoutView: View {
                     sets: exercise.sets,
                     durationSeconds: exercise.durationSeconds,
                     calories: exercise.calories,
+                    isometricWeightKg: exercise.isometricWeightKg,
+                    isometricSets: exercise.isometricSets,
                     loggedAt: loggedAt,
                     todaysNotes: exercise.todaysNotes
                 )
@@ -4418,6 +4880,8 @@ struct LiveWorkoutView: View {
                 sets: setModels,
                 durationSeconds: nil,
                 calories: nil,
+                isometricWeightKg: nil,
+                isometricSets: [],
                 loggedAt: draft.loggedAt,
                 todaysNotes: draft.todaysNotes
             )
@@ -4437,6 +4901,54 @@ struct LiveWorkoutView: View {
                 sets: [],
                 durationSeconds: durationValue,
                 calories: caloriesValue,
+                isometricWeightKg: nil,
+                isometricSets: [],
+                loggedAt: draft.loggedAt,
+                todaysNotes: draft.todaysNotes
+            )
+        case .isometric:
+            var isometricModels: [IsometricSet] = []
+            for setDraft in draft.isometricSets {
+                let durationTrimmed = setDraft.duration.trimmingCharacters(in: .whitespacesAndNewlines)
+                let weightTrimmed = setDraft.weight.trimmingCharacters(in: .whitespacesAndNewlines)
+                let durationValue = durationTrimmed.isEmpty ? nil : parseDurationSeconds(durationTrimmed)
+                let weightValue = weightTrimmed.isEmpty ? nil : Double(weightTrimmed)
+
+                if durationTrimmed.isEmpty && weightTrimmed.isEmpty {
+                    continue
+                }
+
+                guard let durationValue, durationValue > 0 else { return nil }
+                if let weightValue, weightValue < 0 { return nil }
+
+                let kgValue: Double = {
+                    guard let weightValue, weightValue > 0 else { return 0 }
+                    return draft.weightUnit == .lb ? weightValue * 0.45359237 : weightValue
+                }()
+
+                isometricModels.append(
+                    IsometricSet(
+                        id: setDraft.id,
+                        durationSeconds: durationValue,
+                        weightKg: kgValue
+                    )
+                )
+            }
+
+            guard !isometricModels.isEmpty else { return nil }
+            let totalSeconds = isometricModels.reduce(0) { $0 + $1.durationSeconds }
+            let maxWeight = isometricModels.map(\.weightKg).max() ?? 0
+            let weightValue = maxWeight > 0 ? maxWeight : nil
+
+            return WorkoutExercise(
+                id: draft.entryId ?? UUID(),
+                name: name,
+                type: .isometric,
+                sets: [],
+                durationSeconds: totalSeconds > 0 ? totalSeconds : nil,
+                calories: nil,
+                isometricWeightKg: weightValue,
+                isometricSets: isometricModels,
                 loggedAt: draft.loggedAt,
                 todaysNotes: draft.todaysNotes
             )
@@ -4533,6 +5045,24 @@ struct ExerciseTimelineCard: View {
                 details.append("\(calories) cal")
             }
             return details.isEmpty ? "Cardio" : details.joined(separator: " · ")
+        case .isometric:
+            let setCount = max(exercise.isometricSets.count, (exercise.durationSeconds ?? 0) > 0 ? 1 : 0)
+            let totalSeconds = exercise.isometricSets.isEmpty
+                ? (exercise.durationSeconds ?? 0)
+                : exercise.isometricSets.reduce(0) { $0 + $1.durationSeconds }
+            let maxWeight = exercise.isometricSets.isEmpty
+                ? (exercise.isometricWeightKg ?? 0)
+                : (exercise.isometricSets.map(\.weightKg).max() ?? 0)
+            var details: [String] = ["\(setCount) sets"]
+            if totalSeconds > 0 {
+                details.append(durationLabel(totalSeconds))
+            }
+            if maxWeight > 0 {
+                details.append(formattedWeight(maxWeight, unit: weightUnit))
+            } else {
+                details.append("Bodyweight")
+            }
+            return details.joined(separator: " · ")
         }
     }
 }
@@ -4656,6 +5186,8 @@ struct AddWorkoutView: View {
                         sets: setModels,
                         durationSeconds: nil,
                         calories: nil,
+                        isometricWeightKg: nil,
+                        isometricSets: [],
                         loggedAt: draft.loggedAt,
                         todaysNotes: draft.todaysNotes
                     )
@@ -4696,6 +5228,84 @@ struct AddWorkoutView: View {
                         sets: [],
                         durationSeconds: durationValue,
                         calories: caloriesValue,
+                        isometricWeightKg: nil,
+                        isometricSets: [],
+                        loggedAt: draft.loggedAt,
+                        todaysNotes: draft.todaysNotes
+                    )
+                )
+            case .isometric:
+                var isometricModels: [IsometricSet] = []
+                var hasAnyInput = false
+                var hasInvalidSet = false
+
+                for setDraft in draft.isometricSets {
+                    let durationTrimmed = setDraft.duration.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let weightTrimmed = setDraft.weight.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let durationValue = durationTrimmed.isEmpty ? nil : parseDurationSeconds(durationTrimmed)
+                    let weightValue = weightTrimmed.isEmpty ? nil : Double(weightTrimmed)
+
+                    if durationTrimmed.isEmpty && weightTrimmed.isEmpty {
+                        continue
+                    }
+
+                    hasAnyInput = true
+
+                    if durationValue == nil || durationValue == 0 {
+                        hasInvalidSet = true
+                        continue
+                    }
+                    if let weightValue, weightValue < 0 {
+                        hasInvalidSet = true
+                        continue
+                    }
+
+                    let kgValue: Double = {
+                        guard let weightValue, weightValue > 0 else { return 0 }
+                        return draft.weightUnit == .lb ? weightValue * 0.45359237 : weightValue
+                    }()
+
+                    isometricModels.append(
+                        IsometricSet(
+                            id: setDraft.id,
+                            durationSeconds: durationValue ?? 0,
+                            weightKg: kgValue
+                        )
+                    )
+                }
+
+                if hasInvalidSet {
+                    hasInvalid = true
+                    continue
+                }
+
+                if name.isEmpty && hasAnyInput {
+                    hasInvalid = true
+                    continue
+                }
+
+                guard !isometricModels.isEmpty else {
+                    continue
+                }
+
+                guard !name.isEmpty else {
+                    hasInvalid = true
+                    continue
+                }
+
+                let totalSeconds = isometricModels.reduce(0) { $0 + $1.durationSeconds }
+                let maxWeight = isometricModels.map(\.weightKg).max() ?? 0
+
+                validExercises.append(
+                    WorkoutExercise(
+                        id: draft.entryId ?? UUID(),
+                        name: name,
+                        type: .isometric,
+                        sets: [],
+                        durationSeconds: totalSeconds > 0 ? totalSeconds : nil,
+                        calories: nil,
+                        isometricWeightKg: maxWeight > 0 ? maxWeight : nil,
+                        isometricSets: isometricModels,
                         loggedAt: draft.loggedAt,
                         todaysNotes: draft.todaysNotes
                     )
@@ -5089,9 +5699,38 @@ struct AddWorkoutView: View {
                     name: exercise.name,
                     type: .cardio,
                     sets: [],
+                    isometricSets: [IsometricSetDraft()],
                     weightUnit: store.defaultWeightUnit,
                     durationMinutes: formattedDurationValue(exercise.durationSeconds),
                     calories: formattedOptionalInt(exercise.calories),
+                    exerciseNote: store.exerciseNote(for: exercise.name),
+                    todaysNotes: exercise.todaysNotes ?? "",
+                    entryId: exercise.id,
+                    loggedAt: exercise.loggedAt
+                )
+            case .isometric:
+                let setDrafts: [IsometricSetDraft]
+                if !exercise.isometricSets.isEmpty {
+                    setDrafts = exercise.isometricSets.map { set in
+                        let weightText = set.weightKg > 0
+                            ? String(format: "%.1f", weightValue(set.weightKg, unit: store.defaultWeightUnit))
+                            : ""
+                        return IsometricSetDraft(
+                            duration: formattedDurationValue(set.durationSeconds),
+                            weight: weightText,
+                            durationPlaceholder: "",
+                            weightPlaceholder: ""
+                        )
+                    }
+                } else {
+                    setDrafts = [IsometricSetDraft(duration: formattedDurationValue(exercise.durationSeconds))]
+                }
+                return ExerciseDraft(
+                    name: exercise.name,
+                    type: .isometric,
+                    sets: [],
+                    isometricSets: setDrafts,
+                    weightUnit: store.defaultWeightUnit,
                     exerciseNote: store.exerciseNote(for: exercise.name),
                     todaysNotes: exercise.todaysNotes ?? "",
                     entryId: exercise.id,
@@ -5340,6 +5979,8 @@ struct AddWorkoutView: View {
                     sets: exercise.sets,
                     durationSeconds: exercise.durationSeconds,
                     calories: exercise.calories,
+                    isometricWeightKg: exercise.isometricWeightKg,
+                    isometricSets: exercise.isometricSets,
                     loggedAt: combineDate(workoutDate, time: now),
                     todaysNotes: exercise.todaysNotes
                 )
@@ -5356,6 +5997,8 @@ struct AddWorkoutView: View {
                 sets: exercise.sets,
                 durationSeconds: exercise.durationSeconds,
                 calories: exercise.calories,
+                isometricWeightKg: exercise.isometricWeightKg,
+                isometricSets: exercise.isometricSets,
                 loggedAt: times[index],
                 todaysNotes: exercise.todaysNotes
             )
@@ -5379,7 +6022,7 @@ struct AddWorkoutView: View {
             let base = lastLoggedAt ?? fallback
             let increment: TimeInterval
             if let lastType {
-                if lastType == .cardio {
+                if lastType == .cardio || lastType == .isometric {
                     let duration = lastDurationSeconds ?? 0
                     increment = duration > 0 ? TimeInterval(duration) : 60
                 } else {
@@ -5400,6 +6043,8 @@ struct AddWorkoutView: View {
                 sets: exercise.sets,
                 durationSeconds: exercise.durationSeconds,
                 calories: exercise.calories,
+                isometricWeightKg: exercise.isometricWeightKg,
+                isometricSets: exercise.isometricSets,
                 loggedAt: assigned,
                 todaysNotes: exercise.todaysNotes
             )
@@ -5523,6 +6168,7 @@ struct TemplateFlowView: View {
         let withDialogs = AnyView(withChanges
             .sheet(item: $selectedExercise) { selection in
                 if drafts.indices.contains(selection.index) {
+                    let draftId = drafts[selection.index].id
                     TodaysNotesEntryView(
                         store: store,
                         workoutDate: workoutDate,
@@ -5530,7 +6176,7 @@ struct TemplateFlowView: View {
                         draft: $drafts[selection.index],
                         onSave: handleTemplateSave,
                         onCancel: {
-                            handleTemplateCancel(draftId: drafts[selection.index].id)
+                            handleTemplateCancel(draftId: draftId)
                         }
                     )
                 }
@@ -5678,7 +6324,6 @@ struct TemplateFlowView: View {
                 .listRowSeparator(.hidden)
                 .scrollContentBackground(.hidden)
                 .padding(.horizontal, 24)
-                .padding(.bottom, 120)
             } else {
                 startScreen
             }
@@ -5698,12 +6343,11 @@ struct TemplateFlowView: View {
                             .font(.custom("Avenir Next", size: 18))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 12)
-                            .foregroundStyle(themeColor(.night))
+                            .foregroundStyle(themeColor(.night).opacity(canFinish ? 1 : 0.55))
                             .background(themeColor(.sand))
                             .clipShape(Capsule())
                     }
                     .disabled(!canFinish)
-                    .opacity(canFinish ? 1 : 0.4)
 
                     Button {
                         DraftStore.clear(.templateFlow)
@@ -5716,7 +6360,11 @@ struct TemplateFlowView: View {
                             .foregroundStyle(themeColor(.sand))
                             .background(
                                 Capsule()
-                                    .stroke(themeColor(.sand).opacity(0.6), lineWidth: 1)
+                                    .fill(themeColor(.night))
+                                    .overlay(
+                                        Capsule()
+                                            .stroke(themeColor(.sand).opacity(0.6), lineWidth: 1)
+                                    )
                             )
                     }
                 }
@@ -6138,6 +6786,8 @@ struct TemplateFlowView: View {
                     sets: setModels,
                     durationSeconds: nil,
                     calories: nil,
+                    isometricWeightKg: nil,
+                    isometricSets: [],
                     loggedAt: draft.loggedAt,
                     todaysNotes: draft.todaysNotes
                 ),
@@ -6176,6 +6826,63 @@ struct TemplateFlowView: View {
                     sets: [],
                     durationSeconds: durationValue,
                     calories: caloriesValue,
+                    isometricWeightKg: nil,
+                    isometricSets: [],
+                    loggedAt: draft.loggedAt,
+                    todaysNotes: draft.todaysNotes
+                ),
+                false
+            )
+        case .isometric:
+            var isometricModels: [IsometricSet] = []
+            var hasAnyInput = false
+
+            for setDraft in draft.isometricSets {
+                let durationTrimmed = setDraft.duration.trimmingCharacters(in: .whitespacesAndNewlines)
+                let weightTrimmed = setDraft.weight.trimmingCharacters(in: .whitespacesAndNewlines)
+                let durationValue = durationTrimmed.isEmpty ? nil : parseDurationSeconds(durationTrimmed)
+                let weightValue = weightTrimmed.isEmpty ? nil : Double(weightTrimmed)
+
+                if durationTrimmed.isEmpty && weightTrimmed.isEmpty {
+                    continue
+                }
+
+                hasAnyInput = true
+
+                if durationValue == nil || durationValue == 0 { return (nil, true) }
+                if let weightValue, weightValue < 0 { return (nil, true) }
+
+                let kgValue: Double = {
+                    guard let weightValue, weightValue > 0 else { return 0 }
+                    return draft.weightUnit == .lb ? weightValue * 0.45359237 : weightValue
+                }()
+
+                isometricModels.append(
+                    IsometricSet(
+                        id: setDraft.id,
+                        durationSeconds: durationValue ?? 0,
+                        weightKg: kgValue
+                    )
+                )
+            }
+
+            if name.isEmpty && hasAnyInput { return (nil, true) }
+            guard !isometricModels.isEmpty else { return (nil, false) }
+            guard !name.isEmpty else { return (nil, true) }
+
+            let totalSeconds = isometricModels.reduce(0) { $0 + $1.durationSeconds }
+            let maxWeight = isometricModels.map(\.weightKg).max() ?? 0
+
+            return (
+                WorkoutExercise(
+                    id: draft.entryId ?? UUID(),
+                    name: name,
+                    type: .isometric,
+                    sets: [],
+                    durationSeconds: totalSeconds > 0 ? totalSeconds : nil,
+                    calories: nil,
+                    isometricWeightKg: maxWeight > 0 ? maxWeight : nil,
+                    isometricSets: isometricModels,
                     loggedAt: draft.loggedAt,
                     todaysNotes: draft.todaysNotes
                 ),
@@ -6222,6 +6929,8 @@ struct TemplateFlowView: View {
                     sets: exercise.sets,
                     durationSeconds: exercise.durationSeconds,
                     calories: exercise.calories,
+                    isometricWeightKg: exercise.isometricWeightKg,
+                    isometricSets: exercise.isometricSets,
                     loggedAt: combineDate(workoutDate, time: now),
                     todaysNotes: exercise.todaysNotes
                 )
@@ -6238,6 +6947,8 @@ struct TemplateFlowView: View {
                 sets: exercise.sets,
                 durationSeconds: exercise.durationSeconds,
                 calories: exercise.calories,
+                isometricWeightKg: exercise.isometricWeightKg,
+                isometricSets: exercise.isometricSets,
                 loggedAt: times[index],
                 todaysNotes: exercise.todaysNotes
             )
@@ -6393,6 +7104,12 @@ struct TemplateFlowView: View {
         if !draft.calories.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return false
         }
+        for set in draft.isometricSets {
+            if !set.duration.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                !set.weight.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return false
+            }
+        }
         for set in draft.sets {
             for segment in set.segments {
                 if !segment.weight.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
@@ -6524,6 +7241,8 @@ struct TodaysNotesEntryView: View {
                     sets: setModels,
                     durationSeconds: nil,
                     calories: nil,
+                    isometricWeightKg: nil,
+                    isometricSets: [],
                     loggedAt: draft.loggedAt,
                     todaysNotes: draft.todaysNotes
                 ),
@@ -6562,6 +7281,63 @@ struct TodaysNotesEntryView: View {
                     sets: [],
                     durationSeconds: durationValue,
                     calories: caloriesValue,
+                    isometricWeightKg: nil,
+                    isometricSets: [],
+                    loggedAt: draft.loggedAt,
+                    todaysNotes: draft.todaysNotes
+                ),
+                false
+            )
+        case .isometric:
+            var isometricModels: [IsometricSet] = []
+            var hasAnyInput = false
+
+            for setDraft in draft.isometricSets {
+                let durationTrimmed = setDraft.duration.trimmingCharacters(in: .whitespacesAndNewlines)
+                let weightTrimmed = setDraft.weight.trimmingCharacters(in: .whitespacesAndNewlines)
+                let durationValue = durationTrimmed.isEmpty ? nil : parseDurationSeconds(durationTrimmed)
+                let weightValue = weightTrimmed.isEmpty ? nil : Double(weightTrimmed)
+
+                if durationTrimmed.isEmpty && weightTrimmed.isEmpty {
+                    continue
+                }
+
+                hasAnyInput = true
+
+                if durationValue == nil || durationValue == 0 { return (nil, true) }
+                if let weightValue, weightValue < 0 { return (nil, true) }
+
+                let kgValue: Double = {
+                    guard let weightValue, weightValue > 0 else { return 0 }
+                    return draft.weightUnit == .lb ? weightValue * 0.45359237 : weightValue
+                }()
+
+                isometricModels.append(
+                    IsometricSet(
+                        id: setDraft.id,
+                        durationSeconds: durationValue ?? 0,
+                        weightKg: kgValue
+                    )
+                )
+            }
+
+            if name.isEmpty && hasAnyInput { return (nil, true) }
+            guard !isometricModels.isEmpty else { return (nil, false) }
+            guard !name.isEmpty else { return (nil, true) }
+
+            let totalSeconds = isometricModels.reduce(0) { $0 + $1.durationSeconds }
+            let maxWeight = isometricModels.map(\.weightKg).max() ?? 0
+
+            return (
+                WorkoutExercise(
+                    id: draft.entryId ?? UUID(),
+                    name: name,
+                    type: .isometric,
+                    sets: [],
+                    durationSeconds: totalSeconds > 0 ? totalSeconds : nil,
+                    calories: nil,
+                    isometricWeightKg: maxWeight > 0 ? maxWeight : nil,
+                    isometricSets: isometricModels,
                     loggedAt: draft.loggedAt,
                     todaysNotes: draft.todaysNotes
                 ),
@@ -6651,12 +7427,11 @@ struct TodaysNotesEntryView: View {
                             .font(.custom("Avenir Next", size: 18))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 12)
-                            .foregroundStyle(themeColor(.night))
+                            .foregroundStyle(themeColor(.night).opacity(canSave ? 1 : 0.55))
                             .background(themeColor(.sand))
                             .clipShape(Capsule())
                     }
                     .disabled(!canSave)
-                    .opacity(canSave ? 1 : 0.4)
 
                     Button {
                         onCancel?()
@@ -6669,7 +7444,11 @@ struct TodaysNotesEntryView: View {
                             .foregroundStyle(themeColor(.sand))
                             .background(
                                 Capsule()
-                                    .stroke(themeColor(.sand).opacity(0.6), lineWidth: 1)
+                                    .fill(themeColor(.night))
+                                    .overlay(
+                                        Capsule()
+                                            .stroke(themeColor(.sand).opacity(0.6), lineWidth: 1)
+                                    )
                             )
                     }
                 }
@@ -7012,8 +7791,11 @@ struct ExerciseEditorRow: View {
             applyLatestPlaceholders()
         }
         .onChange(of: draft.type) { _, newValue in
-            if newValue == .cardio {
+            if newValue == .cardio || newValue == .isometric {
                 draft.sets = []
+                if newValue == .isometric && draft.isometricSets.isEmpty {
+                    draft.isometricSets = [IsometricSetDraft()]
+                }
             } else if draft.sets.isEmpty {
                 draft.sets = [WorkoutSetDraft()]
             }
@@ -7077,8 +7859,10 @@ struct ExerciseEditorRow: View {
             VStack(alignment: .leading, spacing: 12) {
                 if draft.type == .weights {
                     weightsSection
-                } else {
+                } else if draft.type == .cardio {
                     cardioSection
+                } else {
+                    isometricSection
                 }
                 if isTodaysNotesEnabled {
                     todaysNotesSection
@@ -7146,6 +7930,62 @@ struct ExerciseEditorRow: View {
                 placeholder: draft.caloriesPlaceholder.isEmpty ? "150" : draft.caloriesPlaceholder,
                 keyboard: .numberPad
             )
+        }
+    }
+
+    private var isometricSection: some View {
+        VStack(spacing: 10) {
+            ForEach(Array($draft.isometricSets.enumerated()), id: \.element.id) { index, $set in
+                isometricSetRow(index: index, set: $set)
+            }
+
+            Divider()
+                .overlay(themeColor(.sand).opacity(0.12))
+
+            Button {
+                draft.isometricSets.append(IsometricSetDraft())
+            } label: {
+                HStack {
+                    Image(systemName: "plus.circle")
+                    Text("Add Set")
+                }
+                .font(.custom("Avenir Next", size: 16))
+                .foregroundStyle(themedPrimaryText())
+            }
+            .buttonStyle(.plain)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func isometricSetRow(index: Int, set: Binding<IsometricSetDraft>) -> some View {
+        let setId = set.wrappedValue.id
+        let showsTitle = index == 0
+        let setValue = set.wrappedValue
+        return HStack(alignment: .center, spacing: 12) {
+            if draft.isometricSets.count > 1 {
+                Button {
+                    draft.isometricSets.removeAll { $0.id == setId }
+                } label: {
+                    Image(systemName: "minus.circle")
+                        .foregroundStyle(themedSecondaryText())
+                }
+                .buttonStyle(.plain)
+            }
+            InputCard(
+                title: "Time (mm:ss)",
+                text: set.duration,
+                placeholder: setValue.durationPlaceholder.isEmpty ? "00:45" : setValue.durationPlaceholder,
+                keyboard: .numbersAndPunctuation,
+                showsTitle: showsTitle
+            )
+            InputCard(
+                title: "Weight",
+                text: set.weight,
+                placeholder: setValue.weightPlaceholder.isEmpty ? "0" : setValue.weightPlaceholder,
+                keyboard: .decimalPad,
+                showsTitle: showsTitle
+            )
+            UnitPillAligned(unit: $draft.weightUnit, showsTitle: showsTitle)
         }
     }
 
@@ -7238,6 +8078,20 @@ struct ExerciseEditorRow: View {
                                 .font(.custom("Avenir Next", size: 12))
                                 .fontWeight(.medium)
                                 .foregroundStyle(themedSecondaryText())
+                            Spacer()
+                            Button {
+                                presentExerciseNotesInfoIfNeeded()
+                                draft.isExerciseNoteExpanded = true
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "pencil")
+                                        .font(.system(size: 11, weight: .medium))
+                                    Text("Edit")
+                                }
+                            }
+                            .font(.custom("Avenir Next", size: 12))
+                            .foregroundStyle(themedSecondaryText())
+                            .buttonStyle(.plain)
                         }
                         Text(trimmedNote)
                             .font(.custom("Avenir Next", size: 14))
@@ -7256,26 +8110,6 @@ struct ExerciseEditorRow: View {
                             )
                     )
 
-                    Button {
-                        presentExerciseNotesInfoIfNeeded()
-                        draft.isExerciseNoteExpanded = true
-                    } label: {
-                        HStack(spacing: 8) {
-                            Image(systemName: "pencil")
-                                .font(.system(size: 12, weight: .medium))
-                            Text("Edit Note")
-                                .font(.custom("Avenir Next", size: 13))
-                                .fontWeight(.medium)
-                        }
-                        .foregroundStyle(themedPrimaryText())
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 8)
-                        .background(
-                            Capsule()
-                                .fill(themeColor(.sand).opacity(0.15))
-                        )
-                    }
-                    .buttonStyle(.plain)
                 }
             }
         }
@@ -7370,6 +8204,20 @@ struct ExerciseEditorRow: View {
                                 .font(.custom("Avenir Next", size: 12))
                                 .fontWeight(.medium)
                                 .foregroundStyle(themedSecondaryText())
+                            Spacer()
+                            Button {
+                                presentTodaysNotesInfoIfNeeded()
+                                draft.isTodaysNotesExpanded = true
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "pencil")
+                                        .font(.system(size: 11, weight: .medium))
+                                    Text("Edit")
+                                }
+                            }
+                            .font(.custom("Avenir Next", size: 12))
+                            .foregroundStyle(themedSecondaryText())
+                            .buttonStyle(.plain)
                         }
                         Text(trimmedEntry)
                             .font(.custom("Avenir Next", size: 14))
@@ -7388,26 +8236,6 @@ struct ExerciseEditorRow: View {
                             )
                     )
 
-                    Button {
-                        presentTodaysNotesInfoIfNeeded()
-                        draft.isTodaysNotesExpanded = true
-                    } label: {
-                        HStack(spacing: 8) {
-                            Image(systemName: "pencil")
-                                .font(.system(size: 12, weight: .medium))
-                            Text("Edit Today's Notes")
-                                .font(.custom("Avenir Next", size: 13))
-                                .fontWeight(.medium)
-                        }
-                        .foregroundStyle(themedPrimaryText())
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 8)
-                        .background(
-                            Capsule()
-                                .fill(themeColor(.sand).opacity(0.15))
-                        )
-                    }
-                    .buttonStyle(.plain)
                 }
             }
         }
@@ -7450,6 +8278,20 @@ struct ExerciseEditorRow: View {
                 )
             }
             return WorkoutSetDraft(id: set.id, segments: segments)
+        }
+        draft.isometricSets = draft.isometricSets.map { set in
+            let trimmedWeight = set.weight.trimmingCharacters(in: .whitespacesAndNewlines)
+            let value = Double(trimmedWeight) ?? 0
+            let converted = roundToHalf(value * multiplier)
+            let placeholderValue = Double(set.weightPlaceholder) ?? 0
+            let convertedPlaceholder = roundToHalf(placeholderValue * multiplier)
+            return IsometricSetDraft(
+                id: set.id,
+                duration: set.duration,
+                weight: trimmedWeight.isEmpty ? "" : (value == 0 ? "0" : String(format: "%.1f", converted)),
+                durationPlaceholder: set.durationPlaceholder,
+                weightPlaceholder: placeholderValue == 0 ? set.weightPlaceholder : String(format: "%.1f", convertedPlaceholder)
+            )
         }
     }
 
@@ -7500,6 +8342,26 @@ struct ExerciseEditorRow: View {
             }
             if draft.calories.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 draft.caloriesPlaceholder = formattedOptionalInt(latestExercise.calories)
+            }
+        case .isometric:
+            guard draft.type == .isometric else { return }
+            let hasAnyInput = draft.isometricSets.contains {
+                !$0.duration.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                !$0.weight.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }
+            guard !hasAnyInput else { return }
+            let latestSets = latestExercise.isometricSets
+            guard !latestSets.isEmpty else { return }
+            draft.isometricSets = latestSets.map { set in
+                let weightPlaceholder = set.weightKg > 0
+                    ? String(format: "%.1f", weightValue(set.weightKg, unit: draft.weightUnit))
+                    : "0"
+                return IsometricSetDraft(
+                    duration: "",
+                    weight: "",
+                    durationPlaceholder: formattedDurationValue(set.durationSeconds),
+                    weightPlaceholder: weightPlaceholder
+                )
             }
         }
     }
@@ -7600,6 +8462,7 @@ struct WorkoutSessionCard: View {
         let mergedExercises = session.mergedExercises()
         let weightExercises = mergedExercises.filter { $0.type == .weights }
         let cardioExercises = mergedExercises.filter { $0.type == .cardio }
+        let isometricExercises = mergedExercises.filter { $0.type == .isometric }
         let totalSets = weightExercises.reduce(0) { $0 + $1.sets.count }
         VStack(alignment: .leading, spacing: 10) {
             HStack {
@@ -7618,6 +8481,9 @@ struct WorkoutSessionCard: View {
                 }
                 if !cardioExercises.isEmpty {
                     TagView(text: "\(cardioExercises.count) cardio")
+                }
+                if !isometricExercises.isEmpty {
+                    TagView(text: "\(isometricExercises.count) isometric")
                 }
                 if let first = mergedExercises.first {
                     TagView(text: first.name)
@@ -7680,6 +8546,16 @@ struct WorkoutSessionCard: View {
             if details.isEmpty {
                 details.append("Cardio")
             }
+            return "\(exercise.name) - \(details.joined(separator: ", "))"
+        case .isometric:
+            let setCount = exercise.isometricSets.count
+            let totalSeconds = exercise.isometricSets.reduce(0) { $0 + $1.durationSeconds }
+            let maxWeight = exercise.isometricSets.map(\.weightKg).max() ?? 0
+            var details: [String] = ["\(setCount) sets"]
+            if totalSeconds > 0 {
+                details.append(durationLabel(totalSeconds))
+            }
+            details.append(maxWeight > 0 ? "Weighted" : "Bodyweight")
             return "\(exercise.name) - \(details.joined(separator: ", "))"
         }
     }
@@ -7809,6 +8685,17 @@ struct ExerciseDetailCard: View {
                     }
                     if let calories = exercise.calories, calories > 0 {
                         Text("Calories: \(calories) cal")
+                            .font(.custom("Avenir Next", size: 13))
+                            .foregroundStyle(themedSecondaryText())
+                    }
+                }
+            case .isometric:
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(Array(exercise.isometricSets.enumerated()), id: \.element.id) { index, set in
+                        let weightLabel = set.weightKg > 0
+                            ? formattedWeight(set.weightKg, unit: weightUnit)
+                            : "Bodyweight"
+                        Text("Set \(index + 1): \(durationLabel(set.durationSeconds)) • \(weightLabel)")
                             .font(.custom("Avenir Next", size: 13))
                             .foregroundStyle(themedSecondaryText())
                     }
@@ -8136,6 +9023,9 @@ struct ExerciseLibraryView: View {
     @ObservedObject var store: WorkoutStore
     @State private var searchText = ""
     @State private var draftTemplate: WorkoutTemplate?
+    @State private var templateSeed: TemplateSeed?
+    @State private var isSelecting = false
+    @State private var selectedExerciseNames: [String] = []
 
     struct ExerciseNoteEntry: Identifiable {
         let id = UUID()
@@ -8209,10 +9099,40 @@ struct ExerciseLibraryView: View {
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
                 } header: {
-                    Text("Explore")
-                        .font(.custom("Avenir Next", size: 28))
-                        .fontWeight(.semibold)
-                        .foregroundStyle(themedPrimaryText())
+                    HStack {
+                        Text("Explore")
+                            .font(.custom("Avenir Next", size: 28))
+                            .fontWeight(.semibold)
+                            .foregroundStyle(themedPrimaryText())
+                        Spacer()
+                        if isSelecting {
+                            Button("Finish") {
+                                createTemplateFromSelection()
+                            }
+                            .font(.custom("Avenir Next", size: 13))
+                            .foregroundStyle(themedAccentForeground())
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(themeColor(.sand))
+                            .clipShape(Capsule())
+                            .disabled(selectedExerciseNames.isEmpty)
+                            .opacity(selectedExerciseNames.isEmpty ? 0.5 : 1)
+                        }
+                        Button {
+                            if isSelecting {
+                                selectedExerciseNames = []
+                            }
+                            isSelecting.toggle()
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: isSelecting ? "xmark.circle" : "checklist")
+                                    .font(.system(size: 12, weight: .semibold))
+                                Text(isSelecting ? "Cancel" : "Create Template")
+                            }
+                        }
+                        .font(.custom("Avenir Next", size: 12))
+                        .foregroundStyle(themedSecondaryText())
+                    }
                 }
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)
@@ -8272,22 +9192,34 @@ struct ExerciseLibraryView: View {
                     Section {
                         ForEach(groupedExercises[group] ?? []) { exercise in
                             Button {
-                                startQuickWorkout(for: exercise.name)
+                                if isSelecting {
+                                    toggleSelection(for: exercise)
+                                } else {
+                                    startQuickWorkout(for: exercise.name)
+                                }
                             } label: {
                                 HStack {
                                     Text(exercise.name)
                                         .font(.custom("Avenir Next", size: 16))
                                         .foregroundStyle(themedPrimaryText())
                                     Spacer()
-                                    Image(systemName: "figure.strengthtraining.traditional")
-                                        .font(.custom("Avenir Next", size: 14))
-                                        .foregroundStyle(themedSecondaryText())
+                                    if isSelecting {
+                                        Image(systemName: isSelected(exercise.name) ? "checkmark.circle.fill" : "circle")
+                                            .font(.custom("Avenir Next", size: 15))
+                                            .foregroundStyle(isSelected(exercise.name) ? themeColor(.sand) : themedSecondaryText())
+                                    } else {
+                                        Image(systemName: "figure.strengthtraining.traditional")
+                                            .font(.custom("Avenir Next", size: 14))
+                                            .foregroundStyle(themedSecondaryText())
+                                    }
                                 }
                                 .padding(.vertical, 10)
                                 .padding(.horizontal, 14)
                                 .background(
                                     RoundedRectangle(cornerRadius: 14)
-                                        .fill(themeColor(.card).opacity(0.9))
+                                        .fill(isSelecting && isSelected(exercise.name)
+                                            ? themeColor(.sand).opacity(0.12)
+                                            : themeColor(.card).opacity(0.9))
                                         .overlay(
                                             RoundedRectangle(cornerRadius: 14)
                                                 .stroke(themeColor(.sand).opacity(0.08), lineWidth: 1)
@@ -8323,6 +9255,9 @@ struct ExerciseLibraryView: View {
         .sheet(item: $draftTemplate) { template in
             LiveWorkoutView(store: store, template: template)
         }
+        .sheet(item: $templateSeed) { seed in
+            AddTemplateView(store: store, seed: seed)
+        }
     }
 
     private func startQuickWorkout(for name: String) {
@@ -8343,6 +9278,37 @@ struct ExerciseLibraryView: View {
                 )
             ]
         )
+    }
+
+    private func isSelected(_ name: String) -> Bool {
+        selectedExerciseNames.contains(name)
+    }
+
+    private func toggleSelection(for exercise: LibraryExercise) {
+        let name = exercise.name
+        if let index = selectedExerciseNames.firstIndex(of: name) {
+            selectedExerciseNames.remove(at: index)
+        } else {
+            selectedExerciseNames.append(name)
+        }
+    }
+
+    private func createTemplateFromSelection() {
+        let names = selectedExerciseNames
+        guard !names.isEmpty else { return }
+        let drafts = names.map { name -> ExerciseDraft in
+            let type = store.exerciseType(for: name) ?? .weights
+            return ExerciseDraft(
+                name: name,
+                type: type,
+                weightUnit: store.defaultWeightUnit
+            )
+        }
+        let seedDrafts = drafts.isEmpty ? [ExerciseDraft(weightUnit: store.defaultWeightUnit)] : drafts
+        let title = "Template \(store.templates.count + 1)"
+        templateSeed = TemplateSeed(title: title, drafts: seedDrafts)
+        selectedExerciseNames = []
+        isSelecting = false
     }
 }
 
@@ -9174,6 +10140,7 @@ struct AddTemplateView: View {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("New Template")
                         .font(.custom("Avenir Next", size: 28))
+                    
                         .fontWeight(.semibold)
                         .foregroundStyle(themeColor(.sand))
                         .padding(.horizontal, 24)
@@ -9201,41 +10168,46 @@ struct AddTemplateView: View {
                         .padding(.bottom, 8)
                 }
 
-                if !isKeyboardVisible {
-                    VStack(spacing: 10) {
-                        Button {
-                            let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
-                            store.addTemplate(title: trimmedTitle, exercises: validExercises)
-                            dismiss()
-                        } label: {
-                            Text("Save Template")
-                                .font(.custom("Avenir Next", size: 18))
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 12)
-                                .foregroundStyle(themeColor(.night))
-                                .background(themeColor(.sand))
-                                .clipShape(Capsule())
-                        }
-                        .disabled(!canSave)
-                        .opacity(canSave ? 1 : 0.4)
-
-                        Button {
-                            dismiss()
-                        } label: {
-                            Text("Cancel")
-                                .font(.custom("Avenir Next", size: 18))
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 12)
-                                .foregroundStyle(themeColor(.sand))
-                                .background(
-                                    Capsule()
-                                        .stroke(themeColor(.sand).opacity(0.6), lineWidth: 1)
-                                )
-                        }
+            }
+        }
+        .safeAreaInset(edge: .bottom) {
+            if !isKeyboardVisible {
+                VStack(spacing: 10) {
+                    Button {
+                        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+                        store.addTemplate(title: trimmedTitle, exercises: validExercises)
+                        dismiss()
+                    } label: {
+                        Text("Save Template")
+                            .font(.custom("Avenir Next", size: 18))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .foregroundStyle(themeColor(.night).opacity(canSave ? 1 : 0.55))
+                            .background(themeColor(.sand))
+                            .clipShape(Capsule())
                     }
-                    .padding(.horizontal, 24)
-                    .padding(.bottom, 12)
+                    .disabled(!canSave)
+
+                    Button {
+                        dismiss()
+                    } label: {
+                        Text("Cancel")
+                            .font(.custom("Avenir Next", size: 18))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .foregroundStyle(themeColor(.sand))
+                            .background(
+                                Capsule()
+                                    .fill(themeColor(.night))
+                                    .overlay(
+                                        Capsule()
+                                            .stroke(themeColor(.sand).opacity(0.6), lineWidth: 1)
+                                    )
+                            )
+                    }
                 }
+                .padding(.horizontal, 24)
+                .padding(.bottom, 12)
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
@@ -9302,10 +10274,6 @@ struct AddTemplateView: View {
             .listRowInsets(EdgeInsets(top: 8, leading: 24, bottom: 16, trailing: 16))
             .buttonStyle(.plain)
 
-            Color.clear
-                .frame(height: 120)
-                .listRowBackground(Color.clear)
-                .listRowSeparator(.hidden)
         }
         .listStyle(.plain)
         .listRowSeparator(.hidden)
@@ -9453,11 +10421,6 @@ struct EditTemplateView: View {
                     .listRowBackground(Color.clear)
                     .listRowInsets(EdgeInsets(top: 8, leading: 24, bottom: 16, trailing: 16))
                     .buttonStyle(.plain)
-
-                    Color.clear
-                        .frame(height: 120)
-                        .listRowBackground(Color.clear)
-                        .listRowSeparator(.hidden)
                 }
                 .listStyle(.plain)
                 .listRowSeparator(.hidden)
@@ -9473,41 +10436,48 @@ struct EditTemplateView: View {
                         .padding(.bottom, 8)
                 }
 
-                if !isKeyboardVisible {
-                    VStack(spacing: 10) {
-                        Button {
-                            let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
-                            store.updateTemplate(id: template.id, title: trimmedTitle, exercises: validExercises)
-                            dismiss()
-                        } label: {
-                            Text("Save Changes")
-                                .font(.custom("Avenir Next", size: 18))
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 12)
-                                .foregroundStyle(themeColor(.night))
-                                .background(themeColor(.sand))
-                                .clipShape(Capsule())
-                        }
-                        .disabled(!canSave)
-                        .opacity(canSave ? 1 : 0.4)
-
-                        Button {
-                            dismiss()
-                        } label: {
-                            Text("Cancel")
-                                .font(.custom("Avenir Next", size: 18))
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 12)
-                                .foregroundStyle(themeColor(.sand))
-                                .background(
-                                    Capsule()
-                                        .stroke(themeColor(.sand).opacity(0.6), lineWidth: 1)
-                                )
-                        }
+            }
+        }
+        .safeAreaInset(edge: .bottom) {
+            if !isKeyboardVisible {
+                VStack(spacing: 10) {
+                    Button {
+                        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+                        store.updateTemplate(id: template.id, title: trimmedTitle, exercises: validExercises)
+                        dismiss()
+                    } label: {
+                        Text("Save Changes")
+                            .font(.custom("Avenir Next", size: 18))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .foregroundStyle(themeColor(.night))
+                            .background(
+                                themeColor(.sand).opacity(canSave ? 1 : 0.55)
+                            )
+                            .clipShape(Capsule())
                     }
-                    .padding(.horizontal, 24)
-                    .padding(.bottom, 12)
+                    .disabled(!canSave)
+
+                    Button {
+                        dismiss()
+                    } label: {
+                        Text("Cancel")
+                            .font(.custom("Avenir Next", size: 18))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .foregroundStyle(themeColor(.sand))
+                            .background(
+                                Capsule()
+                                    .fill(themeColor(.night))
+                                    .overlay(
+                                        Capsule()
+                                            .stroke(themeColor(.sand).opacity(0.6), lineWidth: 1)
+                                    )
+                            )
+                    }
                 }
+                .padding(.horizontal, 24)
+                .padding(.bottom, 12)
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
