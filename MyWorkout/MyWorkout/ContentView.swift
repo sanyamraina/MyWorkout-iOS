@@ -7123,6 +7123,12 @@ struct TemplateFlowView: View {
 }
 
 struct TodaysNotesEntryView: View {
+    private struct NotesPreviewItem: Identifiable {
+        let id: String
+        let label: String
+        let text: String
+    }
+
     @ObservedObject var store: WorkoutStore
     let workoutDate: Date
     let usesManualTimes: Bool
@@ -7135,6 +7141,30 @@ struct TodaysNotesEntryView: View {
     @State private var showSpotHud = false
     @State private var spotHudMessage = ""
     @State private var spotHudDismissWorkItem: DispatchWorkItem?
+    @State private var showNotesPreviewPage = false
+
+    private var notesPreviewItems: [NotesPreviewItem] {
+        var items: [NotesPreviewItem] = []
+        let trimmedName = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let todays = draft.todaysNotes.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fallbackTodays = trimmedName.isEmpty
+            ? ""
+            : (store.latestExerciseRecord(named: trimmedName)?.exercise.todaysNotes?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
+        let todaysToShow = !todays.isEmpty ? todays : fallbackTodays
+        let tips = draft.exerciseNote.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fallbackTips = trimmedName.isEmpty
+            ? ""
+            : store.exerciseNote(for: trimmedName).trimmingCharacters(in: .whitespacesAndNewlines)
+        let tipsToShow = !tips.isEmpty ? tips : fallbackTips
+        if !todaysToShow.isEmpty {
+            items.append(NotesPreviewItem(id: "today", label: "Today's Note", text: todaysToShow))
+        }
+        if !tipsToShow.isEmpty {
+            items.append(NotesPreviewItem(id: "tips", label: "Exercise Tip", text: tipsToShow))
+        }
+        return items
+    }
 
     init(
         store: WorkoutStore,
@@ -7408,6 +7438,73 @@ struct TodaysNotesEntryView: View {
                     .padding(.top, 12)
             }
         }
+        .fullScreenCover(isPresented: $showNotesPreviewPage) {
+            ZStack {
+                LinearGradient(
+                    colors: [themeColor(.night), themeColor(.coal)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .ignoresSafeArea()
+
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack(spacing: 10) {
+                        Image(systemName: "bookmark.fill")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(themedPrimaryText())
+                            .frame(width: 26, height: 26)
+                            .background(
+                                Circle()
+                                    .fill(themeColor(.sand).opacity(0.2))
+                            )
+                        Text("Notes from previous session")
+                            .font(.custom("Avenir Next", size: 22))
+                            .fontWeight(.semibold)
+                            .foregroundStyle(themedPrimaryText())
+                    }
+                    .padding(.top, 16)
+
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 10) {
+                            ForEach(notesPreviewItems) { item in
+                                notePreviewRow(item)
+                            }
+                        }
+                        .padding(.top, 4)
+                    }
+                }
+                .padding(.horizontal, 24)
+                .safeAreaInset(edge: .bottom) {
+                    Button {
+                        showNotesPreviewPage = false
+                    } label: {
+                        Text("Continue")
+                            .font(.custom("Avenir Next", size: 18))
+                            .fontWeight(.semibold)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .foregroundStyle(themeColor(.night))
+                            .background(themeColor(.sand))
+                            .clipShape(Capsule())
+                    }
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 12)
+                    .background(
+                        LinearGradient(
+                            colors: [
+                                themeColor(.night).opacity(0.0),
+                                themeColor(.night).opacity(0.9)
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                        .ignoresSafeArea()
+                    )
+                }
+            }
+            .presentationBackground(.clear)
+            .interactiveDismissDisabled(true)
+        }
         .contentShape(Rectangle())
         .onTapGesture {
             dismissKeyboard()
@@ -7473,6 +7570,10 @@ struct TodaysNotesEntryView: View {
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
             isKeyboardVisible = false
         }
+        .onAppear {
+            guard !notesPreviewItems.isEmpty else { return }
+            showNotesPreviewPage = true
+        }
         .onDisappear {
             if !didSave {
                 onCancel?()
@@ -7493,6 +7594,39 @@ struct TodaysNotesEntryView: View {
         }
         spotHudDismissWorkItem = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2, execute: workItem)
+    }
+
+    private func notePreviewRow(_ item: NotesPreviewItem) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: previewIcon(for: item))
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(themedSecondaryText())
+                .frame(width: 20, height: 20)
+                .padding(.top, 1)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(item.label)
+                    .font(.custom("Avenir Next", size: 11))
+                    .foregroundStyle(themedSecondaryText())
+                Text(item.text)
+                    .font(.custom("Avenir Next", size: 13))
+                    .foregroundStyle(themedPrimaryText())
+                    .lineLimit(2)
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(themeColor(.card).opacity(0.7))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(themeColor(.sand).opacity(0.1), lineWidth: 1)
+                )
+        )
+    }
+
+    private func previewIcon(for item: NotesPreviewItem) -> String {
+        item.id == "today" ? "square.and.pencil" : "note.text"
     }
 
     private func parseDurationSeconds(_ text: String) -> Int? {
@@ -7584,19 +7718,45 @@ struct ExerciseEditorRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            headerRow
-            nameField
-            metricsSection
-        }
-        .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 14)
-                .fill(themeColor(.card))
-                .overlay(
+            VStack(alignment: .leading, spacing: 12) {
+                headerRow
+                nameField
+                metricsSection
+            }
+            .padding(12)
+            .background(
+                RoundedRectangle(cornerRadius: 14)
+                    .fill(themeColor(.card))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14)
+                            .stroke(themeColor(.sand).opacity(0.08), lineWidth: 1)
+                    )
+            )
+
+            if showsMetrics && (isTodaysNotesEnabled || isExerciseNotesEnabled) {
+                VStack(alignment: .leading, spacing: 12) {
+                    if isTodaysNotesEnabled {
+                        todaysNotesSection
+                    }
+                    if isTodaysNotesEnabled && isExerciseNotesEnabled {
+                        Divider()
+                            .overlay(themeColor(.sand).opacity(0.12))
+                    }
+                    if isExerciseNotesEnabled {
+                        notesSection
+                    }
+                }
+                .padding(12)
+                .background(
                     RoundedRectangle(cornerRadius: 14)
-                        .stroke(themeColor(.sand).opacity(0.08), lineWidth: 1)
+                        .fill(themeColor(.card))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 14)
+                                .stroke(themeColor(.sand).opacity(0.08), lineWidth: 1)
+                        )
                 )
-        )
+            }
+        }
         .zIndex(isNameFocused ? 5 : 1)
         .sheet(isPresented: $showSpotSheet) {
             VStack(spacing: 16) {
@@ -7856,24 +8016,12 @@ struct ExerciseEditorRow: View {
     @ViewBuilder
     private var metricsSection: some View {
         if showsMetrics {
-            VStack(alignment: .leading, spacing: 12) {
-                if draft.type == .weights {
-                    weightsSection
-                } else if draft.type == .cardio {
-                    cardioSection
-                } else {
-                    isometricSection
-                }
-                if isTodaysNotesEnabled {
-                    todaysNotesSection
-                }
-                if isExerciseNotesEnabled {
-                    if isTodaysNotesEnabled {
-                        Divider()
-                            .overlay(themeColor(.sand).opacity(0.12))
-                    }
-                    notesSection
-                }
+            if draft.type == .weights {
+                weightsSection
+            } else if draft.type == .cardio {
+                cardioSection
+            } else {
+                isometricSection
             }
         }
     }
@@ -7908,7 +8056,7 @@ struct ExerciseEditorRow: View {
                     Image(systemName: "plus.circle")
                     Text("Add Set")
                 }
-                .font(.custom("Avenir Next", size: 16))
+                 .font(.custom("Avenir Next", size: 16))
                 .foregroundStyle(themedPrimaryText())
             }
             .buttonStyle(.plain)
@@ -9553,20 +9701,31 @@ struct SetCardView: View {
                     set.segments.removeAll { $0.id == segmentId }
                 }
             }
-            InputCard(
-                title: "Reps",
-                text: segment.reps,
-                placeholder: segmentValue.repsPlaceholder.isEmpty ? "10" : segmentValue.repsPlaceholder,
-                keyboard: .numberPad,
-                showsTitle: showsTitle
-            )
-            InputCard(
-                title: "Weight",
-                text: segment.weight,
-                placeholder: segmentValue.weightPlaceholder.isEmpty ? "10" : segmentValue.weightPlaceholder,
-                keyboard: .decimalPad,
-                showsTitle: showsTitle
-            )
+            GeometryReader { proxy in
+                let availableWidth = max(proxy.size.width - 12, 0)
+                let repsWidth = availableWidth * 0.4
+                let weightWidth = availableWidth * 0.6
+                HStack(spacing: 12) {
+                    InputCard(
+                        title: "Reps",
+                        text: segment.reps,
+                        placeholder: segmentValue.repsPlaceholder.isEmpty ? "10" : segmentValue.repsPlaceholder,
+                        keyboard: .numberPad,
+                        showsTitle: showsTitle
+                    )
+                    .frame(width: repsWidth)
+
+                    InputCard(
+                        title: "Weight",
+                        text: segment.weight,
+                        placeholder: segmentValue.weightPlaceholder.isEmpty ? "10" : segmentValue.weightPlaceholder,
+                        keyboard: .decimalPad,
+                        showsTitle: showsTitle
+                    )
+                    .frame(width: weightWidth)
+                }
+            }
+            .frame(height: showsTitle ? 56 : 40)
             if isBodyweightSegment(segmentValue) {
                 BodyweightPillAligned(isCompact: isCompact, showsTitle: showsTitle)
             } else {
